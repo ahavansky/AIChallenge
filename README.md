@@ -10,9 +10,9 @@ Modules:
 
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
+- `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
 - `:core:network` - OkHttp Gemini REST client, kotlinx.serialization DTOs, timeout setup, and network/error mapping.
-- `:core-mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core-utils` - Shared prompt normalization used by the feature and covered with unit tests.
+- `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:home` - Prompt input screen, `HomeViewModel`, UI state model, Compose UI, UI tests, and screenshot tests.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.

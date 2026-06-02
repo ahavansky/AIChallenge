@@ -42,9 +42,9 @@ rtk android docs fetch "<doc-id-or-url>"
 
 - `:app` - application shell, Hilt setup, app theme, root navigation.
 - `:core:designsystem` - reusable Compose UI, theme, tokens, previews.
+- `:core:mvvm` - shared MVI/MVVM primitives.
 - `:core:network` - Gemini REST client, DTO, serialization, network errors.
-- `:core-mvvm` - shared MVI/MVVM primitives.
-- `:core-utils` - small shared utilities.
+- `:core:utils` - small shared utilities.
 - `:feature:home` - home/chat feature, ViewModel, UI, tests.
 
 Правила:

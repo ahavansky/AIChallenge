@@ -40,9 +40,9 @@ kotlin {
 
 dependencies {
     implementation(project(":core:designsystem"))
+    implementation(project(":core:mvvm"))
     implementation(project(":core:network"))
-    implementation(project(":core-mvvm"))
-    implementation(project(":core-utils"))
+    implementation(project(":core:utils"))
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)

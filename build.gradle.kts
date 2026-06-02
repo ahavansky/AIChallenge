@@ -16,7 +16,7 @@ subprojects {
 }
 
 dependencies {
-  kover(project(":core-utils"))
+  kover(project(":core:utils"))
   kover(project(":core:network"))
   kover(project(":feature:home"))
 }

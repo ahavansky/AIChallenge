@@ -20,7 +20,7 @@ plugins {
 rootProject.name = "AIChallenge"
 include(":app")
 include(":core:designsystem")
+include(":core:mvvm")
 include(":core:network")
-include(":core-mvvm")
-include(":core-utils")
+include(":core:utils")
 include(":feature:home")
