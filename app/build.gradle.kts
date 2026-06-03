@@ -83,6 +83,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.hilt.android)
+    implementation(libs.timber)
 
     // Arch Components
     implementation(libs.androidx.lifecycle.runtime.compose)

@@ -1,13 +1,20 @@
 package com.akhavanskii.aichallenge.core.network
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalSerializationApi::class)
 class GeminiDtosTest {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
 
     @Test
     fun requestFromPromptSerializesUserPrompt() {
@@ -15,10 +22,46 @@ class GeminiDtosTest {
 
         assertTrue(encoded.contains("\"role\":\"user\""))
         assertTrue(encoded.contains("\"text\":\"Hello Gemini\""))
+        assertFalse(encoded.contains("generationConfig"))
     }
 
     @Test
-    fun firstTextOrNullReturnsFirstNonBlankPart() {
+    fun requestFromPromptSerializesGenerationConfig() {
+        val encoded =
+            json.encodeToString(
+                GenerateContentRequest.fromPrompt(
+                    prompt = "Hello Gemini",
+                    generationConfig =
+                        GeminiGenerationConfig(
+                            responseMimeType = "application/json",
+                            responseSchemaJson = """{"type":"object","properties":{"answer":{"type":"string"}}}""",
+                            maxOutputTokens = 128,
+                            stopSequences = listOf("END"),
+                            temperature = 0.4,
+                            topP = 0.8,
+                            topK = 32,
+                            candidateCount = 2,
+                            presencePenalty = 0.1,
+                            frequencyPenalty = 0.2,
+                        ).toDto(json),
+                ),
+            )
+
+        assertTrue(encoded.contains("\"generationConfig\""))
+        assertTrue(encoded.contains("\"responseMimeType\":\"application/json\""))
+        assertTrue(encoded.contains("\"responseSchema\":{\"type\":\"object\""))
+        assertTrue(encoded.contains("\"maxOutputTokens\":128"))
+        assertTrue(encoded.contains("\"stopSequences\":[\"END\"]"))
+        assertTrue(encoded.contains("\"temperature\":0.4"))
+        assertTrue(encoded.contains("\"topP\":0.8"))
+        assertTrue(encoded.contains("\"topK\":32"))
+        assertTrue(encoded.contains("\"candidateCount\":2"))
+        assertTrue(encoded.contains("\"presencePenalty\":0.1"))
+        assertTrue(encoded.contains("\"frequencyPenalty\":0.2"))
+    }
+
+    @Test
+    fun textOrNullReturnsFirstNonBlankPart() {
         val decoded =
             json.decodeFromString<GenerateContentResponse>(
                 """
@@ -37,6 +80,44 @@ class GeminiDtosTest {
                 """.trimIndent(),
             )
 
-        assertEquals("Useful answer", decoded.firstTextOrNull())
+        assertEquals("Useful answer", decoded.textOrNull())
+    }
+
+    @Test
+    fun textOrNullLabelsMultipleCandidates() {
+        val decoded =
+            json.decodeFromString<GenerateContentResponse>(
+                """
+                {
+                  "candidates": [
+                    {
+                      "content": {
+                        "parts": [
+                          {"text": "First answer"}
+                        ]
+                      }
+                    },
+                    {
+                      "content": {
+                        "parts": [
+                          {"text": "Second answer"}
+                        ]
+                      }
+                    }
+                  ]
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals(
+            """
+            Candidate 1
+            First answer
+
+            Candidate 2
+            Second answer
+            """.trimIndent(),
+            decoded.textOrNull(),
+        )
     }
 }

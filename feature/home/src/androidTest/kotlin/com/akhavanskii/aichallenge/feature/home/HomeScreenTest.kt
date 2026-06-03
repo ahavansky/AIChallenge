@@ -3,12 +3,15 @@ package com.akhavanskii.aichallenge.feature.home
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import org.junit.Rule
@@ -30,7 +33,13 @@ class HomeScreenTest {
                             state =
                                 state.copy(
                                     prompt = action.prompt,
-                                    contentState = if (action.prompt.isBlank()) HomeContentState.Idle else HomeContentState.Input,
+                                    comparisonState =
+                                        if (action.prompt.isBlank()) {
+                                            HomeComparisonState.idle()
+                                        } else {
+                                            HomeComparisonState
+                                                .input()
+                                        },
                                 )
                         }
                     },
@@ -51,34 +60,45 @@ class HomeScreenTest {
                     state =
                         HomeUiState(
                             prompt = "Hello",
-                            contentState = HomeContentState.Loading,
+                            comparisonState = HomeComparisonState.loading(),
                         ),
                     onAction = {},
                 )
             }
         }
 
-        composeRule.onNodeWithTag(HomeTags.LOADING_INDICATOR).assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.CONFIGURED_RESULT).performScrollTo()
+        composeRule.onNodeWithTag(HomeTags.CONFIGURED_LOADING_INDICATOR).assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.BASELINE_RESULT).performScrollTo()
+        composeRule.onNodeWithTag(HomeTags.BASELINE_LOADING_INDICATOR).assertIsDisplayed()
         composeRule.onNodeWithTag(HomeTags.SEND_BUTTON).assertIsNotEnabled()
     }
 
     @Test
-    fun successStateShowsResponse() {
+    fun successStateShowsComparisonResponses() {
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {
                 HomeScreen(
                     state =
                         HomeUiState(
                             prompt = "Hello",
-                            contentState = HomeContentState.Success("A useful answer"),
+                            comparisonState =
+                                HomeComparisonState(
+                                    configured = ResponsePaneState.Success("A configured answer"),
+                                    baseline = ResponsePaneState.Success("A baseline answer"),
+                                ),
                         ),
                     onAction = {},
                 )
             }
         }
 
-        composeRule.onNodeWithText("Gemini response").assertIsDisplayed()
-        composeRule.onNodeWithText("A useful answer").assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.CONFIGURED_RESULT).performScrollTo()
+        composeRule.onNodeWithText("With user parameters").assertIsDisplayed()
+        composeRule.onNodeWithText("A configured answer").assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.BASELINE_RESULT).performScrollTo()
+        composeRule.onNodeWithText("Without parameters").assertIsDisplayed()
+        composeRule.onNodeWithText("A baseline answer").assertIsDisplayed()
     }
 
     @Test
@@ -89,14 +109,50 @@ class HomeScreenTest {
                     state =
                         HomeUiState(
                             prompt = "Hello",
-                            contentState = HomeContentState.Error("Missing API key"),
+                            comparisonState =
+                                HomeComparisonState(
+                                    configured = ResponsePaneState.Error("Missing API key"),
+                                    baseline = ResponsePaneState.Success("Baseline answer"),
+                                ),
                         ),
                     onAction = {},
                 )
             }
         }
 
-        composeRule.onNodeWithText("Request error").assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.CONFIGURED_RESULT).performScrollTo()
+        composeRule.onNodeWithText("With user parameters").assertIsDisplayed()
         composeRule.onNodeWithText("Missing API key").assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.BASELINE_RESULT).performScrollTo()
+        composeRule.onNodeWithText("Baseline answer").assertIsDisplayed()
+    }
+
+    @Test
+    fun parameterExplanationsAreShown() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                HomeScreen(
+                    state = HomeUiState(),
+                    onAction = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("generationConfig").performScrollTo().assertIsDisplayed()
+        composeRule
+            .onNodeWithText("Default here: application/json", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule
+            .onNodeWithText("Slider range: 0.0-2.0", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule
+            .onNodeWithText("model maximum is model-specific", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule
+            .onAllNodesWithText("Penalty is not enabled for this model", substring = true)
+            .assertCountEquals(2)
     }
 }

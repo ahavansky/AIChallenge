@@ -4,16 +4,16 @@ AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Comp
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from `HomeViewModel`; user actions flow back to the ViewModel; the ViewModel calls a small Gemini client and updates `StateFlow`.
+The app uses unidirectional data flow. Compose renders immutable UI state from `HomeViewModel`; user actions flow back to the ViewModel; the ViewModel calls a small Gemini client and updates `StateFlow`. On submit, the home screen now starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters.
 
 Modules:
 
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core:network` - OkHttp Gemini REST client, kotlinx.serialization DTOs, timeout setup, and network/error mapping.
+- `:core:network` - OkHttp Gemini REST client, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
-- `:feature:home` - Prompt input screen, `HomeViewModel`, UI state model, Compose UI, UI tests, and screenshot tests.
+- `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, `HomeViewModel`, UI state model, Compose UI, UI tests, and screenshot tests.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 
@@ -33,6 +33,28 @@ Model and endpoint:
 
 - Model: `gemini-3.5-flash`
 - REST endpoint: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent`
+
+## Gemini Parameter Comparison
+
+The home screen exposes Gemini `generationConfig` controls for `responseMimeType`, `responseSchema`, `maxOutputTokens`, `stopSequences`, `temperature`, `topP`, `topK`, `candidateCount`, `presencePenalty`, and `frequencyPenalty`. Numeric controls use sliders; each control includes a detailed UI explanation with boundary values:
+
+- `responseMimeType`: supported values are `text/plain`, `application/json`, and `text/x.enum`; the default is `application/json` so the schema example is valid immediately.
+- `responseSchema`: prefilled with an editable Gemini/OpenAPI schema example using REST type values like `OBJECT`, `STRING`, and `ARRAY`; use only with `application/json` or `text/x.enum`.
+- `maxOutputTokens`: slider range is `1..4096`; the model maximum is model-specific.
+- `stopSequences`: blank or up to 5 newline-separated stop strings.
+- `temperature`: slider range is `0.0..2.0`; model-supported range/default can vary.
+- `topP`: slider range is `0.0..1.0`.
+- `topK`: slider range is `1..40`; model support/default can vary.
+- `candidateCount`: slider range is `1..8`; multiple candidates are model-dependent and increase output-token usage.
+- `presencePenalty`: shown for reference, but not sent for `gemini-3.5-flash` because the API returns `Penalty is not enabled for this model`; future supported-model range is `-2.0 <= value < 2.0`.
+- `frequencyPenalty`: shown for reference, but not sent for `gemini-3.5-flash` because the API returns `Penalty is not enabled for this model`; future supported-model range is `-2.0 <= value < 2.0`.
+
+Submitting a prompt sends two concurrent requests:
+
+- Configured request: includes the user's `generationConfig`.
+- Baseline request: omits `generationConfig`.
+
+The response area shows both outputs in separate panes so the user can compare how generation parameters change the model response. If `candidateCount` returns multiple candidates, the network parser labels and joins the candidates for display.
 
 ## Network Choice
 

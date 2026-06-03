@@ -7,7 +7,7 @@ import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.android.tools.screenshot.PreviewTest
 
 @PreviewTest
-@Preview(showBackground = true, widthDp = 390, heightDp = 760)
+@Preview(showBackground = true, widthDp = 390, heightDp = 900)
 @Composable
 fun HomeIdleLightScreenshot() {
     AIChallengeTheme(dynamicColor = false) {
@@ -22,7 +22,7 @@ fun HomeIdleLightScreenshot() {
 @Preview(
     showBackground = true,
     widthDp = 390,
-    heightDp = 760,
+    heightDp = 900,
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
 @Composable
@@ -36,7 +36,7 @@ fun HomeIdleDarkScreenshot() {
 }
 
 @PreviewTest
-@Preview(showBackground = true, widthDp = 360, heightDp = 720)
+@Preview(showBackground = true, widthDp = 360, heightDp = 900)
 @Composable
 fun HomeCompactLoadingScreenshot() {
     AIChallengeTheme(dynamicColor = false) {
@@ -44,7 +44,7 @@ fun HomeCompactLoadingScreenshot() {
             state =
                 HomeUiState(
                     prompt = "Write a concise Android testing plan.",
-                    contentState = HomeContentState.Loading,
+                    comparisonState = HomeComparisonState.loading(),
                 ),
             onAction = {},
         )
@@ -52,7 +52,7 @@ fun HomeCompactLoadingScreenshot() {
 }
 
 @PreviewTest
-@Preview(showBackground = true, widthDp = 390, heightDp = 760)
+@Preview(showBackground = true, widthDp = 390, heightDp = 900)
 @Composable
 fun HomeResponseScreenshot() {
     AIChallengeTheme(dynamicColor = false) {
@@ -60,7 +60,11 @@ fun HomeResponseScreenshot() {
             state =
                 HomeUiState(
                     prompt = "Explain UDF.",
-                    contentState = HomeContentState.Success("State flows down to Compose. User events flow back to the ViewModel."),
+                    comparisonState =
+                        HomeComparisonState(
+                            configured = ResponsePaneState.Success("Candidate 1\nState moves down as JSON-friendly bullets."),
+                            baseline = ResponsePaneState.Success("State flows down to Compose. User events flow back to the ViewModel."),
+                        ),
                 ),
             onAction = {},
         )
@@ -68,7 +72,7 @@ fun HomeResponseScreenshot() {
 }
 
 @PreviewTest
-@Preview(showBackground = true, widthDp = 390, heightDp = 760)
+@Preview(showBackground = true, widthDp = 390, heightDp = 900)
 @Composable
 fun HomeErrorScreenshot() {
     AIChallengeTheme(dynamicColor = false) {
@@ -76,7 +80,11 @@ fun HomeErrorScreenshot() {
             state =
                 HomeUiState(
                     prompt = "Hello",
-                    contentState = HomeContentState.Error("Gemini API key is missing."),
+                    comparisonState =
+                        HomeComparisonState(
+                            configured = ResponsePaneState.Error("Gemini API key is missing."),
+                            baseline = ResponsePaneState.Success("Baseline answer without generationConfig."),
+                        ),
                 ),
             onAction = {},
         )
