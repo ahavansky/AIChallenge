@@ -78,6 +78,32 @@ class RestGeminiTextClientTest {
         }
 
     @Test
+    fun generateUsesProvidedModelNameInGeminiEndpoint() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        body = """{"candidates":[{"content":{"parts":[{"text":"Answer"}]}}]}""",
+                    )
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.generate(
+                    prompt = "Hello",
+                    generationConfig = null,
+                    modelName = "gemini-2.5-flash-lite",
+                )
+
+            assertEquals(GeminiResult.Success("Answer"), result)
+            assertEquals(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                factory.lastRequest?.url.toString(),
+            )
+        }
+
+    @Test
     fun generateSerializesGenerationConfig() =
         runTest {
             val factory =
@@ -193,6 +219,50 @@ class RestGeminiTextClientTest {
         }
 
     @Test
+    fun generateRetriesRateLimitResponses() =
+        runTest {
+            var attempts = 0
+            val factory =
+                FakeCallFactory { request ->
+                    attempts += 1
+                    if (attempts == 1) {
+                        jsonResponse(request = request, code = 429, body = """{"error":"rate limit"}""")
+                    } else {
+                        jsonResponse(
+                            request = request,
+                            body = """{"candidates":[{"content":{"parts":[{"text":"Recovered"}]}}]}""",
+                        )
+                    }
+                }
+            val client = client(factory = factory)
+
+            val result = client.generate("Hello", generationConfig = null)
+
+            assertEquals(GeminiResult.Success("Recovered"), result)
+            assertEquals(2, factory.callCount)
+        }
+
+    @Test
+    fun generateDoesNotRetryInvalidArgumentResponses() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        code = 400,
+                        body = """{"error":{"message":"Penalty is not enabled for this model"}}""",
+                    )
+                }
+            val client = client(factory = factory)
+
+            val result = client.generate("Hello", generationConfig = null)
+
+            assertTrue(result is GeminiResult.Failure)
+            assertEquals(400, ((result as GeminiResult.Failure).error as GeminiNetworkError.Http).statusCode)
+            assertEquals(1, factory.callCount)
+        }
+
+    @Test
     fun generateMapsInvalidJson() =
         runTest {
             val factory = FakeCallFactory { request -> jsonResponse(request = request, body = "{") }
@@ -229,7 +299,7 @@ class RestGeminiTextClientTest {
         apiKey: String = "key",
         factory: FakeCallFactory,
         endpoint: String = "https://example.test/generate",
-    ): RestGeminiTextClient =
+    ): GeminiTextClient =
         RestGeminiTextClient(
             apiKey = apiKey,
             endpoint = endpoint,

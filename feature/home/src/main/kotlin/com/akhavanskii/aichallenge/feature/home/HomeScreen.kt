@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ fun HomeScreen(
     state: HomeUiState,
     onAction: (HomeAction) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenPromptLab: () -> Unit = {},
 ) {
     BoxWithConstraints(
         modifier =
@@ -70,6 +72,7 @@ fun HomeScreen(
                 PromptSection(
                     state = state,
                     onAction = onAction,
+                    onOpenPromptLab = onOpenPromptLab,
                     modifier = Modifier.weight(0.95f),
                 )
                 ResultSection(
@@ -85,6 +88,7 @@ fun HomeScreen(
                 PromptSection(
                     state = state,
                     onAction = onAction,
+                    onOpenPromptLab = onOpenPromptLab,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 ResultSection(
@@ -100,17 +104,30 @@ fun HomeScreen(
 private fun PromptSection(
     state: HomeUiState,
     onAction: (HomeAction) -> Unit,
+    onOpenPromptLab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = "AIChallenge",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "AIChallenge",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            TextButton(
+                onClick = onOpenPromptLab,
+                modifier = Modifier.testTag(HomeTags.PROMPT_LAB_BUTTON),
+            ) {
+                Text("Prompt Lab")
+            }
+        }
         Text(
             text = "Tune Gemini parameters, send one prompt, and compare configured output against a baseline request.",
             style = MaterialTheme.typography.bodyLarge,
@@ -303,7 +320,8 @@ private fun GenerationConfigSection(
             enabled = enabled,
             description =
                 "Up to 5 newline-separated stop strings. Boundary: empty = none; generation stops at the first match " +
-                    "and the stop text is normally omitted.",
+                    "and the stop text is normally omitted. Example: END or ### on separate lines; if the model emits " +
+                    "that marker, output stops before it.",
             modifier = Modifier.testTag(HomeTags.PARAM_STOP_SEQUENCES),
             minLines = 2,
             maxLines = 4,
@@ -632,6 +650,7 @@ private fun LoadingPane(
 
 object HomeTags {
     const val PROMPT_INPUT = "home_prompt_input"
+    const val PROMPT_LAB_BUTTON = "home_prompt_lab_button"
     const val SEND_BUTTON = "home_send_button"
     const val RESULT_AREA = "home_result_area"
     const val CONFIGURED_RESULT = "home_configured_result"

@@ -4,6 +4,7 @@ interface GeminiTextClient {
     suspend fun generate(
         prompt: String,
         generationConfig: GeminiGenerationConfig? = null,
+        modelName: String? = null,
     ): GeminiResult<String>
 }
 

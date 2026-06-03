@@ -188,6 +188,7 @@ class HomeViewModelTest {
         override suspend fun generate(
             prompt: String,
             generationConfig: GeminiGenerationConfig?,
+            modelName: String?,
         ): GeminiResult<String> {
             calls += GenerateCall(prompt = prompt, generationConfig = generationConfig)
             return if (generationConfig == null) {
