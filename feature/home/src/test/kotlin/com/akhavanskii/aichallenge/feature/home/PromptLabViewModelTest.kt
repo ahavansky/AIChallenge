@@ -36,9 +36,9 @@ class PromptLabViewModelTest {
     fun modelChangedUpdatesSelectedModel() {
         val viewModel = PromptLabViewModel(RecordingGeminiTextClient())
 
-        viewModel.onAction(PromptLabAction.ModelChanged(PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE))
+        viewModel.onAction(PromptLabAction.ModelChanged(GeminiModelOption.GEMINI_2_5_FLASH_LITE))
 
-        assertEquals(PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE, viewModel.uiState.value.selectedModel)
+        assertEquals(GeminiModelOption.GEMINI_2_5_FLASH_LITE, viewModel.uiState.value.selectedModel)
     }
 
     @Test
@@ -57,7 +57,7 @@ class PromptLabViewModelTest {
                     }
                 }
             val viewModel = PromptLabViewModel(fakeClient)
-            viewModel.onAction(PromptLabAction.ModelChanged(PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE))
+            viewModel.onAction(PromptLabAction.ModelChanged(GeminiModelOption.GEMINI_2_5_FLASH_LITE))
             viewModel.onAction(PromptLabAction.TaskChanged("  Original\n task  "))
 
             viewModel.onAction(PromptLabAction.SubmitTask)
@@ -77,7 +77,7 @@ class PromptLabViewModelTest {
 
             assertEquals(6, fakeClient.calls.size)
             assertTrue(fakeClient.calls.all { it.generationConfig == null })
-            assertTrue(fakeClient.calls.all { it.modelName == PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE.modelName })
+            assertTrue(fakeClient.calls.all { it.modelName == GeminiModelOption.GEMINI_2_5_FLASH_LITE.modelName })
             assertTrue(fakeClient.calls.any { it.prompt == "Original task" })
             assertTrue(fakeClient.calls.any { it.prompt == "Improved prompt" })
             val comparisonPrompt = fakeClient.calls.single { it.prompt.startsWith("Ты сравниваешь четыре ответа") }.prompt

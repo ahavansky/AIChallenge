@@ -5,7 +5,7 @@ import com.akhavanskii.aichallenge.core.mvvm.UiState
 
 data class PromptLabUiState(
     val task: String = "",
-    val selectedModel: PromptLabGeminiModel = PromptLabGeminiModel.GEMINI_2_5_FLASH,
+    val selectedModel: GeminiModelOption = GeminiModelOption.GEMINI_2_5_FLASH,
     val outputs: List<PromptLabStrategyOutput> = initialOutputs(),
     val comparisonState: ResponsePaneState = ResponsePaneState.Empty("The final comparison will appear after all four outputs finish."),
 ) : UiState {
@@ -35,23 +35,6 @@ data class PromptLabUiState(
                 )
             }
     }
-}
-
-enum class PromptLabGeminiModel(
-    val modelName: String,
-    val title: String,
-    val description: String,
-) {
-    GEMINI_2_5_FLASH(
-        modelName = "gemini-2.5-flash",
-        title = "Gemini 2.5 Flash",
-        description = "Stable free-tier model for balanced quality, speed, and everyday reasoning tasks.",
-    ),
-    GEMINI_2_5_FLASH_LITE(
-        modelName = "gemini-2.5-flash-lite",
-        title = "Gemini 2.5 Flash-Lite",
-        description = "Stable free-tier model tuned for lower latency and simpler high-volume tasks.",
-    ),
 }
 
 data class PromptLabStrategyOutput(
@@ -87,7 +70,7 @@ sealed interface PromptLabAction : UiEvent {
     ) : PromptLabAction
 
     data class ModelChanged(
-        val model: PromptLabGeminiModel,
+        val model: GeminiModelOption,
     ) : PromptLabAction
 
     data object SubmitTask : PromptLabAction

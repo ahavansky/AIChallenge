@@ -53,6 +53,21 @@ class HomeScreenTest {
     }
 
     @Test
+    fun labButtonsAreShown() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                HomeScreen(
+                    state = HomeUiState(),
+                    onAction = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(HomeTags.TEMPERATURE_LAB_BUTTON).assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.PROMPT_LAB_BUTTON).assertIsDisplayed()
+    }
+
+    @Test
     fun loadingStateShowsProgressAndDisablesSend() {
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {

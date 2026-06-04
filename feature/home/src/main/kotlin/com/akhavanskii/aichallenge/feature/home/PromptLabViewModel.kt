@@ -33,7 +33,7 @@ class PromptLabViewModel
             }
         }
 
-        private fun onModelChanged(model: PromptLabGeminiModel) {
+        private fun onModelChanged(model: GeminiModelOption) {
             mutableUiState.update { current ->
                 if (current.isLoading) {
                     current

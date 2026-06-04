@@ -50,6 +50,7 @@ fun HomeScreen(
     onAction: (HomeAction) -> Unit,
     modifier: Modifier = Modifier,
     onOpenPromptLab: () -> Unit = {},
+    onOpenTemperatureLab: () -> Unit = {},
 ) {
     BoxWithConstraints(
         modifier =
@@ -73,6 +74,7 @@ fun HomeScreen(
                     state = state,
                     onAction = onAction,
                     onOpenPromptLab = onOpenPromptLab,
+                    onOpenTemperatureLab = onOpenTemperatureLab,
                     modifier = Modifier.weight(0.95f),
                 )
                 ResultSection(
@@ -89,6 +91,7 @@ fun HomeScreen(
                     state = state,
                     onAction = onAction,
                     onOpenPromptLab = onOpenPromptLab,
+                    onOpenTemperatureLab = onOpenTemperatureLab,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 ResultSection(
@@ -100,32 +103,44 @@ fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PromptSection(
     state: HomeUiState,
     onAction: (HomeAction) -> Unit,
     onOpenPromptLab: () -> Unit,
+    onOpenTemperatureLab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = "AIChallenge",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            TextButton(
-                onClick = onOpenPromptLab,
-                modifier = Modifier.testTag(HomeTags.PROMPT_LAB_BUTTON),
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Prompt Lab")
+                TextButton(
+                    onClick = onOpenTemperatureLab,
+                    modifier = Modifier.testTag(HomeTags.TEMPERATURE_LAB_BUTTON),
+                ) {
+                    Text("Temperature Lab")
+                }
+                TextButton(
+                    onClick = onOpenPromptLab,
+                    modifier = Modifier.testTag(HomeTags.PROMPT_LAB_BUTTON),
+                ) {
+                    Text("Prompt Lab")
+                }
             }
         }
         Text(
@@ -651,6 +666,7 @@ private fun LoadingPane(
 object HomeTags {
     const val PROMPT_INPUT = "home_prompt_input"
     const val PROMPT_LAB_BUTTON = "home_prompt_lab_button"
+    const val TEMPERATURE_LAB_BUTTON = "home_temperature_lab_button"
     const val SEND_BUTTON = "home_send_button"
     const val RESULT_AREA = "home_result_area"
     const val CONFIGURED_RESULT = "home_configured_result"

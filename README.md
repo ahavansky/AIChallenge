@@ -4,7 +4,7 @@ AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Comp
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; the ViewModel calls a small Gemini client and updates `StateFlow`. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs.
+The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; the ViewModel calls a small Gemini client and updates `StateFlow`. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types.
 
 Modules:
 
@@ -13,7 +13,7 @@ Modules:
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
 - `:core:network` - OkHttp Gemini REST client, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
-- `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Prompt Lab, feature ViewModels, UI state models, Compose UI, UI tests, and screenshot tests.
+- `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Prompt Lab, Temperature Lab, feature ViewModels, UI state models, Compose UI, UI tests, and screenshot tests.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 
@@ -73,6 +73,16 @@ The Prompt Lab screen sends one task through four methods and displays all four 
 - Expert group: asks an analyst, engineer, and critic to solve the task separately.
 
 After the four outputs complete, the app sends a final Gemini request that compares whether the answers differ and which method produced the most accurate result.
+
+## Temperature Lab
+
+Temperature Lab compares the same task across three `temperature` values. The screen includes the same free-tier Gemini model selector as Prompt Lab and three sliders in the `0.0..2.0` range:
+
+- Temperature A defaults to `0.2` for precise, stable answers.
+- Temperature B defaults to `0.7` for balanced everyday answers.
+- Temperature C defaults to `1.4` for more divergent and creative answers.
+
+Submitting a task sends three concurrent Gemini requests with only `generationConfig.temperature` changed. After all three outputs finish, the app sends those outputs back to Gemini and asks which temperature is best suited for which task types and which setting fits the current task.
 
 ## Network Choice
 

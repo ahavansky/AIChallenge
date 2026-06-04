@@ -46,12 +46,12 @@ class PromptLabScreenTest {
 
         composeRule.onNodeWithTag(PromptLabTags.RUN_BUTTON).assertIsNotEnabled()
         composeRule
-            .onNodeWithTag("${PromptLabTags.MODEL_PREFIX}_${PromptLabGeminiModel.GEMINI_2_5_FLASH.name}")
+            .onNodeWithTag("${PromptLabTags.MODEL_PREFIX}_${GeminiModelOption.GEMINI_2_5_FLASH.name}")
             .assertIsDisplayed()
         composeRule
-            .onNodeWithTag("${PromptLabTags.MODEL_PREFIX}_${PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE.name}")
+            .onNodeWithTag("${PromptLabTags.MODEL_PREFIX}_${GeminiModelOption.GEMINI_2_5_FLASH_LITE.name}")
             .performClick()
-        composeRule.onNodeWithText(PromptLabGeminiModel.GEMINI_2_5_FLASH_LITE.modelName, substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText(GeminiModelOption.GEMINI_2_5_FLASH_LITE.modelName, substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag(PromptLabTags.TASK_INPUT).performTextInput("Solve this")
         composeRule.onNodeWithTag(PromptLabTags.RUN_BUTTON).assertIsEnabled()
     }
