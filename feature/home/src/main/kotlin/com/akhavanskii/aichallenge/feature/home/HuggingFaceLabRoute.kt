@@ -6,18 +6,14 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun HomeRoute(
-    onOpenPromptLab: () -> Unit,
-    onOpenTemperatureLab: () -> Unit,
-    onOpenHuggingFaceLab: () -> Unit,
-    viewModel: HomeViewModel = hiltViewModel(),
+fun HuggingFaceLabRoute(
+    onBack: () -> Unit,
+    viewModel: HuggingFaceLabViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    HomeScreen(
+    HuggingFaceLabScreen(
         state = state,
         onAction = viewModel::onAction,
-        onOpenPromptLab = onOpenPromptLab,
-        onOpenTemperatureLab = onOpenTemperatureLab,
-        onOpenHuggingFaceLab = onOpenHuggingFaceLab,
+        onBack = onBack,
     )
 }

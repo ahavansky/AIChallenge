@@ -8,6 +8,7 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.ui.NavDisplay
 import com.akhavanskii.aichallenge.feature.home.HomeRoute
+import com.akhavanskii.aichallenge.feature.home.HuggingFaceLabRoute
 import com.akhavanskii.aichallenge.feature.home.PromptLabRoute
 import com.akhavanskii.aichallenge.feature.home.TemperatureLabRoute
 import kotlinx.serialization.Serializable
@@ -20,6 +21,9 @@ data object PromptLabDestination : NavKey
 
 @Serializable
 data object TemperatureLabDestination : NavKey
+
+@Serializable
+data object HuggingFaceLabDestination : NavKey
 
 @Composable
 fun AIChallengeApp(modifier: Modifier = Modifier) {
@@ -40,6 +44,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                         HomeRoute(
                             onOpenPromptLab = { backStack.add(PromptLabDestination) },
                             onOpenTemperatureLab = { backStack.add(TemperatureLabDestination) },
+                            onOpenHuggingFaceLab = { backStack.add(HuggingFaceLabDestination) },
                         )
                     }
                 PromptLabDestination ->
@@ -62,7 +67,24 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                             },
                         )
                     }
-                else -> NavEntry(key) { HomeRoute(onOpenPromptLab = {}, onOpenTemperatureLab = {}) }
+                HuggingFaceLabDestination ->
+                    NavEntry(key) {
+                        HuggingFaceLabRoute(
+                            onBack = {
+                                if (backStack.size > 1) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
+                        )
+                    }
+                else ->
+                    NavEntry(key) {
+                        HomeRoute(
+                            onOpenPromptLab = {},
+                            onOpenTemperatureLab = {},
+                            onOpenHuggingFaceLab = {},
+                        )
+                    }
             }
         },
     )

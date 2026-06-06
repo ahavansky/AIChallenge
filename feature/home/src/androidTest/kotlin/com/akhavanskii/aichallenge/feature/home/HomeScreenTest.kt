@@ -64,6 +64,7 @@ class HomeScreenTest {
         }
 
         composeRule.onNodeWithTag(HomeTags.TEMPERATURE_LAB_BUTTON).assertIsDisplayed()
+        composeRule.onNodeWithTag(HomeTags.HUGGINGFACE_LAB_BUTTON).assertIsDisplayed()
         composeRule.onNodeWithTag(HomeTags.PROMPT_LAB_BUTTON).assertIsDisplayed()
     }
 

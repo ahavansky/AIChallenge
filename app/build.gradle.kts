@@ -53,9 +53,20 @@ android {
             .get()
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
+    val huggingFaceApiKey =
+        providers
+            .gradleProperty("HUGGINGFACE_API_KEY")
+            .orElse(providers.gradleProperty("HF_TOKEN"))
+            .orElse(providers.environmentVariable("HUGGINGFACE_API_KEY"))
+            .orElse(providers.environmentVariable("HF_TOKEN"))
+            .orElse(localProperties.getProperty("HUGGINGFACE_API_KEY") ?: localProperties.getProperty("HF_TOKEN") ?: "")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
 
     defaultConfig {
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "HUGGINGFACE_API_KEY", "\"$huggingFaceApiKey\"")
     }
 
     packaging {

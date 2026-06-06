@@ -20,12 +20,20 @@ import javax.inject.Singleton
 @Retention(AnnotationRetention.BINARY)
 annotation class NetworkDispatcher
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class HuggingFaceCallFactory
+
 @Module
 @InstallIn(SingletonComponent::class)
 interface NetworkBindings {
     @Binds
     @Singleton
     fun bindGeminiTextClient(client: RestGeminiTextClient): GeminiTextClient
+
+    @Binds
+    @Singleton
+    fun bindHuggingFaceTextClient(client: RestHuggingFaceTextClient): HuggingFaceTextClient
 }
 
 @Module
@@ -56,8 +64,23 @@ object NetworkModule {
     fun provideCallFactory(client: OkHttpClient): Call.Factory = client
 
     @Provides
+    @Singleton
+    @HuggingFaceCallFactory
+    fun provideHuggingFaceCallFactory(): Call.Factory =
+        OkHttpClient
+            .Builder()
+            .callTimeout(90, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .build()
+
+    @Provides
     @Named(GEMINI_ENDPOINT_NAME)
     fun provideGeminiEndpoint(): String = GEMINI_GENERATE_CONTENT_ENDPOINT
+
+    @Provides
+    @Named(HUGGINGFACE_ENDPOINT_NAME)
+    fun provideHuggingFaceEndpoint(): String = HUGGINGFACE_CHAT_COMPLETIONS_ENDPOINT
 
     @Provides
     @NetworkDispatcher

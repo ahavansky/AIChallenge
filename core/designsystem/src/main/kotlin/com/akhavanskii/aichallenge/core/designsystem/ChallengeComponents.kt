@@ -1,5 +1,6 @@
 package com.akhavanskii.aichallenge.core.designsystem
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -84,15 +85,15 @@ fun ResponsePanel(
                 Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
             )
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyLarge,
+            ResponseMarkdownBody(
+                body = body,
                 color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
