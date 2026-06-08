@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import com.android.tools.screenshot.PreviewTest
 
 @PreviewTest

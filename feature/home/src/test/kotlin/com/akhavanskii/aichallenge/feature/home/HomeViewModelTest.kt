@@ -5,6 +5,7 @@ import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
 import com.akhavanskii.aichallenge.core.network.GeminiNetworkError
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.GeminiTextClient
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent

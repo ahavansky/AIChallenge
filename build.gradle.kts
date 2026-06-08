@@ -19,6 +19,9 @@ dependencies {
   kover(project(":core:utils"))
   kover(project(":core:network"))
   kover(project(":feature:home"))
+  kover(project(":feature:huggingface-lab"))
+  kover(project(":feature:prompt-lab"))
+  kover(project(":feature:temperature-lab"))
 }
 
 kover {
@@ -31,15 +34,15 @@ kover {
           "com.akhavanskii.aichallenge.feature.home.HomeRoute*",
           "com.akhavanskii.aichallenge.feature.home.HomeScreen*",
           "com.akhavanskii.aichallenge.feature.home.HomeTags*",
-          "com.akhavanskii.aichallenge.feature.home.HuggingFaceLabRoute*",
-          "com.akhavanskii.aichallenge.feature.home.HuggingFaceLabScreen*",
-          "com.akhavanskii.aichallenge.feature.home.HuggingFaceLabTags*",
-          "com.akhavanskii.aichallenge.feature.home.PromptLabRoute*",
-          "com.akhavanskii.aichallenge.feature.home.PromptLabScreen*",
-          "com.akhavanskii.aichallenge.feature.home.PromptLabTags*",
-          "com.akhavanskii.aichallenge.feature.home.TemperatureLabRoute*",
-          "com.akhavanskii.aichallenge.feature.home.TemperatureLabScreen*",
-          "com.akhavanskii.aichallenge.feature.home.TemperatureLabTags*",
+          "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute*",
+          "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabScreen*",
+          "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabTags*",
+          "com.akhavanskii.aichallenge.feature.promptlab.PromptLabRoute*",
+          "com.akhavanskii.aichallenge.feature.promptlab.PromptLabScreen*",
+          "com.akhavanskii.aichallenge.feature.promptlab.PromptLabTags*",
+          "com.akhavanskii.aichallenge.feature.temperaturelab.TemperatureLabRoute*",
+          "com.akhavanskii.aichallenge.feature.temperaturelab.TemperatureLabScreen*",
+          "com.akhavanskii.aichallenge.feature.temperaturelab.TemperatureLabTags*",
           "*_Factory",
           "*_MembersInjector",
           "*Hilt*",

@@ -13,7 +13,11 @@ Modules:
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
 - `:core:network` - OkHttp Gemini and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
-- `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Prompt Lab, Temperature Lab, HuggingFace Lab, feature ViewModels, UI state models, Compose UI, UI tests, and screenshot tests.
+- `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
+- `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Home ViewModel, Compose UI, UI tests, and screenshot tests.
+- `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
+- `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
+- `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 

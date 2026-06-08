@@ -2,6 +2,7 @@ package com.akhavanskii.aichallenge.feature.home
 
 import com.akhavanskii.aichallenge.core.mvvm.UiEvent
 import com.akhavanskii.aichallenge.core.mvvm.UiState
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 
 data class HomeUiState(
     val prompt: String = "",
@@ -100,22 +101,6 @@ data class HomeComparisonState(
                 baseline = ResponsePaneState.Loading,
             )
     }
-}
-
-sealed interface ResponsePaneState {
-    data class Empty(
-        val message: String,
-    ) : ResponsePaneState
-
-    data object Loading : ResponsePaneState
-
-    data class Success(
-        val response: String,
-    ) : ResponsePaneState
-
-    data class Error(
-        val message: String,
-    ) : ResponsePaneState
 }
 
 sealed interface HomeAction : UiEvent {

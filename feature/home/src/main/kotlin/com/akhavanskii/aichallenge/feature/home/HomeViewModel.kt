@@ -6,6 +6,7 @@ import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.GeminiTextClient
 import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope

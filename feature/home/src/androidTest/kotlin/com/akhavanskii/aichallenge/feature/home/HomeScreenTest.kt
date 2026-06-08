@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import org.junit.Rule
 import org.junit.Test
 

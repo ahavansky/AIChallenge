@@ -41,6 +41,7 @@ import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.akhavanskii.aichallenge.core.designsystem.ChallengeButton
 import com.akhavanskii.aichallenge.core.designsystem.ChallengeTextField
 import com.akhavanskii.aichallenge.core.designsystem.ResponsePanel
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import java.util.Locale
 import kotlin.math.roundToInt
 

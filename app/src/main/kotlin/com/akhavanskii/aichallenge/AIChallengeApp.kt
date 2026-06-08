@@ -8,9 +8,9 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.ui.NavDisplay
 import com.akhavanskii.aichallenge.feature.home.HomeRoute
-import com.akhavanskii.aichallenge.feature.home.HuggingFaceLabRoute
-import com.akhavanskii.aichallenge.feature.home.PromptLabRoute
-import com.akhavanskii.aichallenge.feature.home.TemperatureLabRoute
+import com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute
+import com.akhavanskii.aichallenge.feature.promptlab.PromptLabRoute
+import com.akhavanskii.aichallenge.feature.temperaturelab.TemperatureLabRoute
 import kotlinx.serialization.Serializable
 
 @Serializable
