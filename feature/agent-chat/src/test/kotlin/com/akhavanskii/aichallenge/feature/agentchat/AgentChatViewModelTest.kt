@@ -23,7 +23,7 @@ class AgentChatViewModelTest {
 
     @Test
     fun inputChangedEnablesSend() {
-        val viewModel = AgentChatViewModel(FakeLlmAgent())
+        val viewModel = createViewModel()
 
         viewModel.onAction(AgentChatAction.InputChanged("Hello"))
 
@@ -36,7 +36,7 @@ class AgentChatViewModelTest {
         runTest {
             val response = CompletableDeferred<AgentResult<String>>()
             val fakeAgent = FakeLlmAgent(results = ArrayDeque(listOf(response)))
-            val viewModel = AgentChatViewModel(fakeAgent)
+            val viewModel = createViewModel(fakeAgent)
             viewModel.onAction(AgentChatAction.InputChanged("  Hello\nGemini  "))
 
             viewModel.onAction(AgentChatAction.Submit)
@@ -73,7 +73,7 @@ class AgentChatViewModelTest {
     fun submitSendsAccumulatedSuccessfulHistory() =
         runTest {
             val fakeAgent = FakeLlmAgent()
-            val viewModel = AgentChatViewModel(fakeAgent)
+            val viewModel = createViewModel(fakeAgent)
 
             viewModel.onAction(AgentChatAction.InputChanged("First"))
             viewModel.onAction(AgentChatAction.Submit)
@@ -106,7 +106,7 @@ class AgentChatViewModelTest {
                             ),
                         ),
                 )
-            val viewModel = AgentChatViewModel(fakeAgent)
+            val viewModel = createViewModel(fakeAgent)
 
             viewModel.onAction(AgentChatAction.InputChanged("First"))
             viewModel.onAction(AgentChatAction.Submit)
@@ -129,7 +129,7 @@ class AgentChatViewModelTest {
     @Test
     fun blankSubmitDoesNotCallAgent() {
         val fakeAgent = FakeLlmAgent()
-        val viewModel = AgentChatViewModel(fakeAgent)
+        val viewModel = createViewModel(fakeAgent)
 
         viewModel.onAction(AgentChatAction.InputChanged(" "))
         viewModel.onAction(AgentChatAction.Submit)
@@ -151,7 +151,7 @@ class AgentChatViewModelTest {
     fun submitUsesSelectedAgentModelName() =
         runTest {
             val fakeAgent = FakeLlmAgent()
-            val viewModel = AgentChatViewModel(fakeAgent)
+            val viewModel = createViewModel(fakeAgent)
 
             viewModel.onAction(AgentChatAction.AgentChanged(AgentChatAgentOption.GEMINI_2_5_FLASH_LITE))
             viewModel.onAction(AgentChatAction.InputChanged("Hello"))
@@ -166,7 +166,7 @@ class AgentChatViewModelTest {
     fun agentSelectionIsLockedAfterChatStartsAndUnlockedAfterClear() =
         runTest {
             val fakeAgent = FakeLlmAgent()
-            val viewModel = AgentChatViewModel(fakeAgent)
+            val viewModel = createViewModel(fakeAgent)
 
             viewModel.onAction(AgentChatAction.AgentChanged(AgentChatAgentOption.GEMINI_2_5_FLASH_LITE))
             viewModel.onAction(AgentChatAction.InputChanged("First"))
@@ -189,6 +189,68 @@ class AgentChatViewModelTest {
             )
             assertTrue(viewModel.uiState.value.canChangeAgent)
         }
+
+    @Test
+    fun initRestoresSavedMessagesAndSelectedAgent() =
+        runTest {
+            val historyStore =
+                FakeAgentChatHistoryStore(
+                    AgentChatHistorySnapshot(
+                        selectedAgent = AgentChatAgentOption.GEMINI_2_5_FLASH,
+                        messages =
+                            listOf(
+                                AgentChatMessage(role = AgentChatRole.USER, text = "Previous question"),
+                                AgentChatMessage(role = AgentChatRole.MODEL, text = "Previous answer"),
+                            ),
+                    ),
+                )
+            val viewModel = createViewModel(historyStore = historyStore)
+
+            runCurrent()
+
+            assertEquals(AgentChatAgentOption.GEMINI_2_5_FLASH, viewModel.uiState.value.selectedAgent)
+            assertEquals(
+                listOf(
+                    AgentChatMessage(role = AgentChatRole.USER, text = "Previous question"),
+                    AgentChatMessage(role = AgentChatRole.MODEL, text = "Previous answer"),
+                ),
+                viewModel.uiState.value.messages,
+            )
+            assertTrue(viewModel.uiState.value.isAgentLocked)
+        }
+
+    @Test
+    fun restoredHistoryIsSentAfterRestart() =
+        runTest {
+            val historyStore = FakeAgentChatHistoryStore()
+            val firstAgent = FakeLlmAgent(GeminiResult.Success("First answer"))
+            val firstViewModel = createViewModel(firstAgent, historyStore)
+
+            firstViewModel.onAction(AgentChatAction.InputChanged("First question"))
+            firstViewModel.onAction(AgentChatAction.Submit)
+            runCurrent()
+
+            val secondAgent = FakeLlmAgent()
+            val restartedViewModel = createViewModel(secondAgent, historyStore)
+            runCurrent()
+            restartedViewModel.onAction(AgentChatAction.InputChanged("Second question"))
+            restartedViewModel.onAction(AgentChatAction.Submit)
+            runCurrent()
+
+            assertEquals(
+                listOf(
+                    AgentMessage.User("First question"),
+                    AgentMessage.Model("First answer"),
+                    AgentMessage.User("Second question"),
+                ),
+                secondAgent.calls.single().messages,
+            )
+        }
+
+    private fun createViewModel(
+        fakeAgent: FakeLlmAgent = FakeLlmAgent(),
+        historyStore: AgentChatHistoryStore = FakeAgentChatHistoryStore(),
+    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore)
 
     private class FakeLlmAgent(
         result: AgentResult<String> = GeminiResult.Success("Answer"),
@@ -218,4 +280,17 @@ class AgentChatViewModelTest {
         val generationConfig: GeminiGenerationConfig?,
         val modelName: String?,
     )
+
+    private class FakeAgentChatHistoryStore(
+        initialSnapshot: AgentChatHistorySnapshot = AgentChatHistorySnapshot(),
+    ) : AgentChatHistoryStore {
+        var snapshot = initialSnapshot
+            private set
+
+        override suspend fun load(): AgentChatHistorySnapshot = snapshot
+
+        override suspend fun save(snapshot: AgentChatHistorySnapshot) {
+            this.snapshot = snapshot
+        }
+    }
 }

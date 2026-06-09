@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -19,9 +20,26 @@ class AgentChatViewModel
     @Inject
     constructor(
         private val llmAgent: LlmAgent,
+        private val historyStore: AgentChatHistoryStore,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
+
+        init {
+            viewModelScope.launch {
+                val snapshot = historyStore.load()
+                mutableUiState.update { current ->
+                    if (current == AgentChatUiState()) {
+                        current.copy(
+                            messages = snapshot.messages,
+                            selectedAgent = snapshot.selectedAgent,
+                        )
+                    } else {
+                        current
+                    }
+                }
+            }
+        }
 
         fun onAction(action: AgentChatAction) {
             when (action) {
@@ -33,7 +51,7 @@ class AgentChatViewModel
         }
 
         private fun onAgentChanged(agent: AgentChatAgentOption) {
-            mutableUiState.update { current ->
+            updateStateAndPersist { current ->
                 if (current.canChangeAgent) current.copy(selectedAgent = agent) else current
             }
         }
@@ -45,7 +63,7 @@ class AgentChatViewModel
         }
 
         private fun clearChat() {
-            mutableUiState.update { current ->
+            updateStateAndPersist { current ->
                 if (current.isLoading) {
                     current
                 } else {
@@ -85,12 +103,14 @@ class AgentChatViewModel
                     isLoading = true,
                 )
             val requestMessages = currentState.messages.toAgentMessages() + AgentMessage.User(prompt)
-            mutableUiState.update {
-                it.copy(
-                    input = "",
-                    messages = currentState.messages + userMessage + loadingMessage,
-                )
-            }
+            val updatedState =
+                mutableUiState.updateAndGet {
+                    it.copy(
+                        input = "",
+                        messages = currentState.messages + userMessage + loadingMessage,
+                    )
+                }
+            persistHistory(updatedState)
 
             viewModelScope.launch {
                 when (
@@ -110,19 +130,38 @@ class AgentChatViewModel
             text: String,
             isError: Boolean = false,
         ) {
-            mutableUiState.update { current ->
-                current.copy(
-                    messages =
-                        current.messages.replaceLastLoading(
-                            AgentChatMessage(
-                                role = AgentChatRole.MODEL,
-                                text = text,
-                                isError = isError,
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(
+                        messages =
+                            current.messages.replaceLastLoading(
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = text,
+                                    isError = isError,
+                                ),
                             ),
-                        ),
-                )
+                    )
+                }
+            persistHistory(updatedState)
+        }
+
+        private fun updateStateAndPersist(transform: (AgentChatUiState) -> AgentChatUiState) {
+            val updatedState = mutableUiState.updateAndGet(transform)
+            persistHistory(updatedState)
+        }
+
+        private fun persistHistory(state: AgentChatUiState) {
+            viewModelScope.launch {
+                historyStore.save(state.toHistorySnapshot())
             }
         }
+
+        private fun AgentChatUiState.toHistorySnapshot(): AgentChatHistorySnapshot =
+            AgentChatHistorySnapshot(
+                messages = messages.filterNot { it.isLoading },
+                selectedAgent = selectedAgent,
+            )
 
         private fun List<AgentChatMessage>.toAgentMessages(): List<AgentMessage> {
             val agentMessages = mutableListOf<AgentMessage>()
