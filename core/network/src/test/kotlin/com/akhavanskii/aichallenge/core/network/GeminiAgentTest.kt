@@ -21,7 +21,7 @@ import java.io.IOException
 import kotlin.reflect.KClass
 
 @OptIn(ExperimentalSerializationApi::class)
-class RestGeminiTextClientTest {
+class GeminiAgentTest {
     private val json =
         Json {
             ignoreUnknownKeys = true
@@ -29,31 +29,31 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateReturnsEmptyPromptWithoutNetworkCall() =
+    fun sendMessageReturnsEmptyPromptWithoutNetworkCall() =
         runTest {
             val factory = FakeCallFactory { error("network should not be called") }
             val client = client(apiKey = "key", factory = factory)
 
-            val result = client.generate(" ", generationConfig = null)
+            val result = client.sendMessage(" ", generationConfig = null)
 
             assertEquals(GeminiResult.Failure(GeminiNetworkError.EmptyPrompt), result)
             assertEquals(0, factory.callCount)
         }
 
     @Test
-    fun generateReturnsMissingApiKeyWithoutNetworkCall() =
+    fun sendMessageReturnsMissingApiKeyWithoutNetworkCall() =
         runTest {
             val factory = FakeCallFactory { error("network should not be called") }
             val client = client(apiKey = "", factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertEquals(GeminiResult.Failure(GeminiNetworkError.MissingApiKey), result)
             assertEquals(0, factory.callCount)
         }
 
     @Test
-    fun generateMapsSuccessfulTextResponse() =
+    fun sendMessageMapsSuccessfulTextResponse() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -64,7 +64,7 @@ class RestGeminiTextClientTest {
                 }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertEquals(GeminiResult.Success("Answer"), result)
             assertEquals("https://example.test/generate", factory.lastRequest?.url.toString())
@@ -78,7 +78,39 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateUsesProvidedModelNameInGeminiEndpoint() =
+    fun sendMessageSerializesAccumulatedChatHistory() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        body = """{"candidates":[{"content":{"parts":[{"text":"Follow-up answer"}]}}]}""",
+                    )
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.sendMessage(
+                    messages =
+                        listOf(
+                            AgentMessage.User("First question"),
+                            AgentMessage.Model("First answer"),
+                            AgentMessage.User("Follow-up"),
+                        ),
+                    generationConfig = null,
+                )
+
+            assertEquals(GeminiResult.Success("Follow-up answer"), result)
+            val body = factory.lastRequest?.bodyString().orEmpty()
+            assertTrue(body.contains("\"role\":\"user\""))
+            assertTrue(body.contains("\"role\":\"model\""))
+            assertTrue(body.contains("\"text\":\"First question\""))
+            assertTrue(body.contains("\"text\":\"First answer\""))
+            assertTrue(body.contains("\"text\":\"Follow-up\""))
+        }
+
+    @Test
+    fun sendMessageUsesProvidedModelNameInGeminiEndpoint() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -90,7 +122,7 @@ class RestGeminiTextClientTest {
             val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
 
             val result =
-                client.generate(
+                client.sendMessage(
                     prompt = "Hello",
                     generationConfig = null,
                     modelName = "gemini-2.5-flash-lite",
@@ -104,7 +136,7 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateSerializesGenerationConfig() =
+    fun sendMessageSerializesGenerationConfig() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -116,7 +148,7 @@ class RestGeminiTextClientTest {
             val client = client(factory = factory)
 
             val result =
-                client.generate(
+                client.sendMessage(
                     prompt = "Hello",
                     generationConfig =
                         GeminiGenerationConfig(
@@ -149,7 +181,7 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateOmitsPenaltiesForGemini35Flash() =
+    fun sendMessageOmitsPenaltiesForGemini35Flash() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -161,7 +193,7 @@ class RestGeminiTextClientTest {
             val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
 
             val result =
-                client.generate(
+                client.sendMessage(
                     prompt = "Hello",
                     generationConfig =
                         GeminiGenerationConfig(
@@ -180,7 +212,7 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateMapsHttpErrors() =
+    fun sendMessageMapsHttpErrors() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -188,14 +220,14 @@ class RestGeminiTextClientTest {
                 }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertTrue(result is GeminiResult.Failure)
             assertEquals(429, ((result as GeminiResult.Failure).error as GeminiNetworkError.Http).statusCode)
         }
 
     @Test
-    fun generateRetriesUnavailableResponses() =
+    fun sendMessageRetriesUnavailableResponses() =
         runTest {
             var attempts = 0
             val factory =
@@ -212,14 +244,14 @@ class RestGeminiTextClientTest {
                 }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertEquals(GeminiResult.Success("Recovered"), result)
             assertEquals(2, factory.callCount)
         }
 
     @Test
-    fun generateRetriesRateLimitResponses() =
+    fun sendMessageRetriesRateLimitResponses() =
         runTest {
             var attempts = 0
             val factory =
@@ -236,14 +268,14 @@ class RestGeminiTextClientTest {
                 }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertEquals(GeminiResult.Success("Recovered"), result)
             assertEquals(2, factory.callCount)
         }
 
     @Test
-    fun generateDoesNotRetryInvalidArgumentResponses() =
+    fun sendMessageDoesNotRetryInvalidArgumentResponses() =
         runTest {
             val factory =
                 FakeCallFactory { request ->
@@ -255,7 +287,7 @@ class RestGeminiTextClientTest {
                 }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertTrue(result is GeminiResult.Failure)
             assertEquals(400, ((result as GeminiResult.Failure).error as GeminiNetworkError.Http).statusCode)
@@ -263,34 +295,34 @@ class RestGeminiTextClientTest {
         }
 
     @Test
-    fun generateMapsInvalidJson() =
+    fun sendMessageMapsInvalidJson() =
         runTest {
             val factory = FakeCallFactory { request -> jsonResponse(request = request, body = "{") }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertTrue((result as GeminiResult.Failure).error is GeminiNetworkError.Serialization)
         }
 
     @Test
-    fun generateMapsEmptyModelResponse() =
+    fun sendMessageMapsEmptyModelResponse() =
         runTest {
             val factory = FakeCallFactory { request -> jsonResponse(request = request, body = """{"candidates":[]}""") }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertEquals(GeminiResult.Failure(GeminiNetworkError.EmptyResponse), result)
         }
 
     @Test
-    fun generateMapsIoExceptions() =
+    fun sendMessageMapsIoExceptions() =
         runTest {
             val factory = FakeCallFactory { throw IOException("offline") }
             val client = client(factory = factory)
 
-            val result = client.generate("Hello", generationConfig = null)
+            val result = client.sendMessage("Hello", generationConfig = null)
 
             assertTrue((result as GeminiResult.Failure).error is GeminiNetworkError.Network)
         }
@@ -299,8 +331,8 @@ class RestGeminiTextClientTest {
         apiKey: String = "key",
         factory: FakeCallFactory,
         endpoint: String = "https://example.test/generate",
-    ): GeminiTextClient =
-        RestGeminiTextClient(
+    ): LlmAgent =
+        GeminiAgent(
             apiKey = apiKey,
             endpoint = endpoint,
             callFactory = factory,

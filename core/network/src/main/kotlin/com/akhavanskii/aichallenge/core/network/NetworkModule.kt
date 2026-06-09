@@ -29,6 +29,10 @@ annotation class HuggingFaceCallFactory
 interface NetworkBindings {
     @Binds
     @Singleton
+    fun bindLlmAgent(agent: GeminiAgent): LlmAgent
+
+    @Binds
+    @Singleton
     fun bindGeminiTextClient(client: RestGeminiTextClient): GeminiTextClient
 
     @Binds

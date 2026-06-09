@@ -7,6 +7,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun HomeRoute(
+    onOpenAgentChat: () -> Unit,
     onOpenPromptLab: () -> Unit,
     onOpenTemperatureLab: () -> Unit,
     onOpenHuggingFaceLab: () -> Unit,
@@ -16,6 +17,7 @@ fun HomeRoute(
     HomeScreen(
         state = state,
         onAction = viewModel::onAction,
+        onOpenAgentChat = onOpenAgentChat,
         onOpenPromptLab = onOpenPromptLab,
         onOpenTemperatureLab = onOpenTemperatureLab,
         onOpenHuggingFaceLab = onOpenHuggingFaceLab,

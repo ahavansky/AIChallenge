@@ -4,16 +4,17 @@ AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Comp
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; the ViewModel calls small LLM clients and updates `StateFlow`. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
+The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, HTTP execution, response parsing, retries, and user-facing error mapping. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
 
 Modules:
 
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core:network` - OkHttp Gemini and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
+- `:core:network` - OkHttp Gemini agent/client and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
+- `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
 - `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Home ViewModel, Compose UI, UI tests, and screenshot tests.
 - `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
@@ -68,6 +69,16 @@ Submitting a prompt sends two concurrent requests:
 
 The response area shows both outputs in separate panes so the user can compare how generation parameters change the model response. If `candidateCount` returns multiple candidates, the network parser labels and joins the candidates for display.
 
+## Agent Chat
+
+Agent Chat is a separate screen for a simple LLM agent. The user picks a Gemini-backed agent before the first message:
+
+- `gemini-3.5-flash` - default chat agent for this app.
+- `gemini-2.5-flash` - balanced Gemini agent for everyday reasoning.
+- `gemini-2.5-flash-lite` - lower-latency Gemini agent for simpler turns.
+
+After the first valid user message, the selected agent is locked for that chat. The Clear chat action removes the accumulated conversation and unlocks agent selection again. Agent Chat keeps accumulated `user` and `model` turns in immutable UI state and sends the full successful conversation history to Gemini on every follow-up. Loading and error messages are shown in the chat, but they are not sent back as model context.
+
 ## Prompt Lab
 
 Prompt Lab includes a model selector for the main current free-tier Gemini Developer API text models:
@@ -116,7 +127,7 @@ After all successful and failed HuggingFace results are collected, the selected 
 
 ## Network Choice
 
-The Gemini and HuggingFace integrations use OkHttp plus kotlinx.serialization. OkHttp keeps the direct REST calls small, explicit, and easy to test with a fake `Call.Factory`; adding Retrofit or Ktor would add more abstraction than these endpoints need.
+The Gemini and HuggingFace integrations use OkHttp plus kotlinx.serialization. Agent Chat goes through `LlmAgent`; `GeminiTextClient` remains as a small compatibility adapter for Home and lab screens that already share the same Gemini transport. OkHttp keeps the direct REST calls small, explicit, and easy to test with a fake `Call.Factory`; adding Retrofit or Ktor would add more abstraction than these endpoints need.
 
 The REST clients retry temporary LLM HTTP failures up to 3 attempts for `429`, `500`, `502`, `503`, and `504`. Validation/configuration errors such as `400 INVALID_ARGUMENT` are not retried.
 

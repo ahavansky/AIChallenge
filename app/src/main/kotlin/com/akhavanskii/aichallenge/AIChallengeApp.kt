@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.ui.NavDisplay
+import com.akhavanskii.aichallenge.feature.agentchat.AgentChatRoute
 import com.akhavanskii.aichallenge.feature.home.HomeRoute
 import com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute
 import com.akhavanskii.aichallenge.feature.promptlab.PromptLabRoute
@@ -15,6 +16,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data object HomeDestination : NavKey
+
+@Serializable
+data object AgentChatDestination : NavKey
 
 @Serializable
 data object PromptLabDestination : NavKey
@@ -42,9 +46,20 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                 HomeDestination ->
                     NavEntry(key) {
                         HomeRoute(
+                            onOpenAgentChat = { backStack.add(AgentChatDestination) },
                             onOpenPromptLab = { backStack.add(PromptLabDestination) },
                             onOpenTemperatureLab = { backStack.add(TemperatureLabDestination) },
                             onOpenHuggingFaceLab = { backStack.add(HuggingFaceLabDestination) },
+                        )
+                    }
+                AgentChatDestination ->
+                    NavEntry(key) {
+                        AgentChatRoute(
+                            onBack = {
+                                if (backStack.size > 1) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
                         )
                     }
                 PromptLabDestination ->
@@ -80,6 +95,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                 else ->
                     NavEntry(key) {
                         HomeRoute(
+                            onOpenAgentChat = {},
                             onOpenPromptLab = {},
                             onOpenTemperatureLab = {},
                             onOpenHuggingFaceLab = {},

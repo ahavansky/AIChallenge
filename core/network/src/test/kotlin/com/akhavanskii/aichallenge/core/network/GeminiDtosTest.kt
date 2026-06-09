@@ -61,6 +61,27 @@ class GeminiDtosTest {
     }
 
     @Test
+    fun requestFromMessagesSerializesChatHistory() {
+        val encoded =
+            json.encodeToString(
+                GenerateContentRequest.fromMessages(
+                    listOf(
+                        AgentMessage.User("First question"),
+                        AgentMessage.Model("First answer"),
+                        AgentMessage.User("Follow-up"),
+                    ),
+                ),
+            )
+
+        assertTrue(encoded.contains("\"role\":\"user\""))
+        assertTrue(encoded.contains("\"role\":\"model\""))
+        assertTrue(encoded.contains("\"text\":\"First question\""))
+        assertTrue(encoded.contains("\"text\":\"First answer\""))
+        assertTrue(encoded.contains("\"text\":\"Follow-up\""))
+        assertFalse(encoded.contains("generationConfig"))
+    }
+
+    @Test
     fun textOrNullReturnsFirstNonBlankPart() {
         val decoded =
             json.decodeFromString<GenerateContentResponse>(

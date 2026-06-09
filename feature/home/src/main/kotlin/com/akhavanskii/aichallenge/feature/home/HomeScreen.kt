@@ -50,6 +50,7 @@ fun HomeScreen(
     state: HomeUiState,
     onAction: (HomeAction) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenAgentChat: () -> Unit = {},
     onOpenPromptLab: () -> Unit = {},
     onOpenTemperatureLab: () -> Unit = {},
     onOpenHuggingFaceLab: () -> Unit = {},
@@ -75,6 +76,7 @@ fun HomeScreen(
                 PromptSection(
                     state = state,
                     onAction = onAction,
+                    onOpenAgentChat = onOpenAgentChat,
                     onOpenPromptLab = onOpenPromptLab,
                     onOpenTemperatureLab = onOpenTemperatureLab,
                     onOpenHuggingFaceLab = onOpenHuggingFaceLab,
@@ -93,6 +95,7 @@ fun HomeScreen(
                 PromptSection(
                     state = state,
                     onAction = onAction,
+                    onOpenAgentChat = onOpenAgentChat,
                     onOpenPromptLab = onOpenPromptLab,
                     onOpenTemperatureLab = onOpenTemperatureLab,
                     onOpenHuggingFaceLab = onOpenHuggingFaceLab,
@@ -112,6 +115,7 @@ fun HomeScreen(
 private fun PromptSection(
     state: HomeUiState,
     onAction: (HomeAction) -> Unit,
+    onOpenAgentChat: () -> Unit,
     onOpenPromptLab: () -> Unit,
     onOpenTemperatureLab: () -> Unit,
     onOpenHuggingFaceLab: () -> Unit,
@@ -134,6 +138,12 @@ private fun PromptSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                TextButton(
+                    onClick = onOpenAgentChat,
+                    modifier = Modifier.testTag(HomeTags.AGENT_CHAT_BUTTON),
+                ) {
+                    Text("Agent Chat")
+                }
                 TextButton(
                     onClick = onOpenTemperatureLab,
                     modifier = Modifier.testTag(HomeTags.TEMPERATURE_LAB_BUTTON),
@@ -676,6 +686,7 @@ private fun LoadingPane(
 
 object HomeTags {
     const val PROMPT_INPUT = "home_prompt_input"
+    const val AGENT_CHAT_BUTTON = "home_agent_chat_button"
     const val PROMPT_LAB_BUTTON = "home_prompt_lab_button"
     const val TEMPERATURE_LAB_BUTTON = "home_temperature_lab_button"
     const val HUGGINGFACE_LAB_BUTTON = "home_huggingface_lab_button"

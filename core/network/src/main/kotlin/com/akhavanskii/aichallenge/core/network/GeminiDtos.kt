@@ -16,14 +16,27 @@ data class GenerateContentRequest(
             prompt: String,
             generationConfig: GeminiGenerationConfigDto? = null,
         ): GenerateContentRequest =
+            fromMessages(
+                messages = listOf(AgentMessage.User(prompt)),
+                generationConfig = generationConfig,
+            )
+
+        fun fromMessages(
+            messages: List<AgentMessage>,
+            generationConfig: GeminiGenerationConfigDto? = null,
+        ): GenerateContentRequest =
             GenerateContentRequest(
                 contents =
-                    listOf(
+                    messages.map { message ->
                         GeminiContentDto(
-                            role = "user",
-                            parts = listOf(GeminiPartDto(text = prompt)),
-                        ),
-                    ),
+                            role =
+                                when (message) {
+                                    is AgentMessage.User -> "user"
+                                    is AgentMessage.Model -> "model"
+                                },
+                            parts = listOf(GeminiPartDto(text = message.text)),
+                        )
+                    },
                 generationConfig = generationConfig,
             )
     }
