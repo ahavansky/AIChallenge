@@ -30,6 +30,7 @@ class GeminiAgent
             messages: List<AgentMessage>,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
+            totalTokenLimit: Int?,
         ): AgentResult<String> {
             val normalizedMessages = messages.normalized()
             val latestUserMessage = normalizedMessages.lastOrNull() as? AgentMessage.User
@@ -44,7 +45,7 @@ class GeminiAgent
 
             val requestId = REQUEST_IDS.incrementAndGet()
             return withContext(dispatcher) {
-                runCatching { executeRequest(requestId, normalizedMessages, generationConfig, modelName) }
+                runCatching { executeRequest(requestId, normalizedMessages, generationConfig, modelName, totalTokenLimit) }
                     .getOrElse { throwable ->
                         Timber
                             .tag(LOG_TAG)
@@ -71,28 +72,59 @@ class GeminiAgent
             messages: List<AgentMessage>,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
+            totalTokenLimit: Int?,
         ): GeminiResult<String> {
             val requestEndpoint = endpoint.withModelName(modelName, requestId)
-            val effectiveGenerationConfig = generationConfig?.withoutUnsupportedFields(requestId, requestEndpoint)
+            val latestUserMessage = messages.lastOrNull() as? AgentMessage.User
+            val currentRequestTokens =
+                latestUserMessage?.let { message ->
+                    countTokensOrNull(
+                        requestId = requestId,
+                        requestEndpoint = requestEndpoint,
+                        messages = listOf(message),
+                    )
+                }
+            val tokenLimit = totalTokenLimit?.takeIf { it > 0 }
+            val tokenWindow =
+                messages.toSlidingTokenWindow(
+                    requestId = requestId,
+                    requestEndpoint = requestEndpoint,
+                    totalTokenLimit = tokenLimit,
+                )
+            val maxOutputTokens =
+                tokenLimit?.let { limit ->
+                    tokenWindow.promptTokens?.let { promptTokens ->
+                        (limit - promptTokens).coerceAtLeast(MIN_OUTPUT_TOKEN_BUDGET)
+                    }
+                }
+            val effectiveGenerationConfig =
+                generationConfig
+                    .withMaxOutputTokens(maxOutputTokens)
+                    ?.withoutUnsupportedFields(requestId, requestEndpoint)
             val requestJson =
                 json.encodeToString(
                     GenerateContentRequest.fromMessages(
-                        messages = messages,
+                        messages = tokenWindow.messages,
                         generationConfig = effectiveGenerationConfig?.toDto(json),
                     ),
                 )
-            val isConfigured = generationConfig != null
-            val latestPromptChars = (messages.lastOrNull() as? AgentMessage.User)?.text?.length ?: 0
+            val isConfigured = effectiveGenerationConfig != null
+            val latestPromptChars = latestUserMessage?.text?.length ?: 0
             Timber
                 .tag(LOG_TAG)
                 .d(
-                    "Gemini request #%d prepared. configured=%s model=%s endpoint=%s messages=%d latestPromptChars=%d requestChars=%d",
+                    "Gemini request #%d prepared. configured=%s model=%s endpoint=%s messages=%d latestPromptChars=%d currentRequestTokens=%s promptTokens=%s slidingWindow=%s totalTokenLimit=%s maxOutputTokens=%s requestChars=%d",
                     requestId,
                     isConfigured,
                     requestEndpoint.modelNameOrUnknown(),
                     requestEndpoint,
-                    messages.size,
+                    tokenWindow.messages.size,
                     latestPromptChars,
+                    currentRequestTokens?.toString() ?: "unknown",
+                    tokenWindow.promptTokens?.toString() ?: "unknown",
+                    tokenWindow.isTrimmed,
+                    tokenLimit?.toString() ?: "none",
+                    maxOutputTokens?.toString() ?: "default",
                     requestJson.length,
                 )
             logPayload(requestId = requestId, label = "requestJson", payload = requestJson)
@@ -148,7 +180,11 @@ class GeminiAgent
                                 ),
                             )
                         } else {
-                            parseResponse(responseBody)
+                            parseResponse(
+                                responseBody = responseBody,
+                                currentRequestTokens = currentRequestTokens,
+                                slidingWindowApplied = tokenWindow.isTrimmed,
+                            )
                         }
                     }
 
@@ -168,6 +204,131 @@ class GeminiAgent
             }
 
             error("Retry loop should always return before exhausting attempts.")
+        }
+
+        private fun countTokensOrNull(
+            requestId: Long,
+            requestEndpoint: String,
+            messages: List<AgentMessage>,
+        ): Int? =
+            runCatching {
+                val countTokensEndpoint =
+                    requestEndpoint.toCountTokensEndpoint()
+                        ?: return null.also {
+                            Timber
+                                .tag(LOG_TAG)
+                                .d(
+                                    "Gemini request #%d skips current request token count because endpoint=%s is not a generateContent URL.",
+                                    requestId,
+                                    requestEndpoint,
+                                )
+                        }
+                val requestJson = json.encodeToString(CountTokensRequest.fromMessages(messages))
+                val request =
+                    Request
+                        .Builder()
+                        .url(countTokensEndpoint)
+                        .header("x-goog-api-key", apiKey)
+                        .header("Content-Type", JSON_MEDIA_TYPE.toString())
+                        .post(requestJson.toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+
+                callFactory.newCall(request).execute().use { response ->
+                    val responseBody = response.body.string()
+                    if (!response.isSuccessful || responseBody.isBlank()) {
+                        Timber
+                            .tag(LOG_TAG)
+                            .w(
+                                "Gemini request #%d current request token count unavailable. status=%d responseChars=%d",
+                                requestId,
+                                response.code,
+                                responseBody.length,
+                            )
+                        return null
+                    }
+
+                    json.decodeFromString<CountTokensResponse>(responseBody).totalTokens.also { tokens ->
+                        Timber
+                            .tag(LOG_TAG)
+                            .d(
+                                "Gemini request #%d current request token count=%s",
+                                requestId,
+                                tokens?.toString() ?: "unknown",
+                            )
+                    }
+                }
+            }.getOrElse { throwable ->
+                if (throwable is CancellationException) throw throwable
+                Timber
+                    .tag(LOG_TAG)
+                    .w(throwable, "Gemini request #%d current request token count failed.", requestId)
+                null
+            }
+
+        private fun List<AgentMessage>.toSlidingTokenWindow(
+            requestId: Long,
+            requestEndpoint: String,
+            totalTokenLimit: Int?,
+        ): SlidingTokenWindow {
+            if (totalTokenLimit == null) {
+                return SlidingTokenWindow(messages = this, promptTokens = null, isTrimmed = false)
+            }
+
+            var candidate = this
+            var promptTokens =
+                countTokensOrNull(
+                    requestId = requestId,
+                    requestEndpoint = requestEndpoint,
+                    messages = candidate,
+                )
+            if (promptTokens == null || promptTokens <= totalTokenLimit) {
+                return SlidingTokenWindow(messages = candidate, promptTokens = promptTokens, isTrimmed = false)
+            }
+
+            var isTrimmed = false
+            while (candidate.size > 1 && promptTokens != null && promptTokens > totalTokenLimit) {
+                val trimmedCandidate = candidate.withoutOldestContextTurn()
+                if (trimmedCandidate == candidate) break
+                candidate = trimmedCandidate
+                isTrimmed = true
+                promptTokens =
+                    countTokensOrNull(
+                        requestId = requestId,
+                        requestEndpoint = requestEndpoint,
+                        messages = candidate,
+                    )
+            }
+
+            if (isTrimmed) {
+                Timber
+                    .tag(LOG_TAG)
+                    .d(
+                        "Gemini request #%d applied sliding window. retainedMessages=%d promptTokens=%s totalTokenLimit=%d",
+                        requestId,
+                        candidate.size,
+                        promptTokens?.toString() ?: "unknown",
+                        totalTokenLimit,
+                    )
+            }
+            return SlidingTokenWindow(messages = candidate, promptTokens = promptTokens, isTrimmed = isTrimmed)
+        }
+
+        private fun List<AgentMessage>.withoutOldestContextTurn(): List<AgentMessage> {
+            if (size <= 1) return this
+            val latestUserMessage = last()
+            val context = dropLast(1)
+            if (context.isEmpty()) return listOf(latestUserMessage)
+
+            val dropCount =
+                if (context.firstOrNull() is AgentMessage.User && context.getOrNull(1) is AgentMessage.Model) {
+                    2
+                } else {
+                    1
+                }
+            return context
+                .drop(dropCount)
+                .dropWhile { it is AgentMessage.Model }
+                .plus(latestUserMessage)
         }
 
         private fun List<AgentMessage>.normalized(): List<AgentMessage> =
@@ -210,6 +371,14 @@ class GeminiAgent
             )
         }
 
+        private fun GeminiGenerationConfig?.withMaxOutputTokens(maxOutputTokens: Int?): GeminiGenerationConfig? {
+            if (maxOutputTokens == null) return this
+            val clampedMaxOutputTokens = maxOutputTokens.coerceAtLeast(MIN_OUTPUT_TOKEN_BUDGET)
+            return this
+                ?.copy(maxOutputTokens = this.maxOutputTokens?.coerceAtMost(clampedMaxOutputTokens) ?: clampedMaxOutputTokens)
+                ?: GeminiGenerationConfig(maxOutputTokens = clampedMaxOutputTokens)
+        }
+
         private fun String.targetsGemini35Flash(): Boolean = contains("/models/$GEMINI_MODEL_NAME:")
 
         private fun String.withModelName(
@@ -246,7 +415,15 @@ class GeminiAgent
                 ?.getOrNull(1)
                 ?: "unknown"
 
-        private fun parseResponse(responseBody: String): GeminiResult<String> {
+        private fun String.toCountTokensEndpoint(): String? =
+            takeIf { it.contains(GENERATE_CONTENT_SUFFIX) }
+                ?.replace(GENERATE_CONTENT_SUFFIX, COUNT_TOKENS_SUFFIX)
+
+        private fun parseResponse(
+            responseBody: String,
+            currentRequestTokens: Int?,
+            slidingWindowApplied: Boolean,
+        ): GeminiResult<String> {
             if (responseBody.isBlank()) {
                 Timber.tag(LOG_TAG).w("Gemini response body is blank.")
                 return GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
@@ -258,7 +435,22 @@ class GeminiAgent
                 Timber.tag(LOG_TAG).w("Gemini response has no non-blank text parts.")
                 GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
             } else {
-                GeminiResult.Success(text)
+                val tokenUsage =
+                    (
+                        decoded.usageMetadata?.toTokenUsage(currentRequestTokens)
+                            ?: currentRequestTokens?.let { GeminiTokenUsage(currentRequestTokens = it) }
+                    )?.copy(slidingWindowApplied = slidingWindowApplied)
+                Timber
+                    .tag(LOG_TAG)
+                    .d(
+                        "Gemini response token usage current=%s history=%s response=%s total=%s slidingWindow=%s",
+                        tokenUsage?.currentRequestTokens?.toString() ?: "unknown",
+                        tokenUsage?.conversationHistoryTokens?.toString() ?: "unknown",
+                        tokenUsage?.modelResponseTokens?.toString() ?: "unknown",
+                        tokenUsage?.totalTokens?.toString() ?: "unknown",
+                        tokenUsage?.slidingWindowApplied?.toString() ?: "unknown",
+                    )
+                GeminiResult.Success(text, tokenUsage = tokenUsage)
             }
         }
 
@@ -295,12 +487,21 @@ class GeminiAgent
         private companion object {
             const val LOG_TAG = "GeminiNetwork"
             const val MAX_ATTEMPTS = 3
+            const val MIN_OUTPUT_TOKEN_BUDGET = 1
             const val LOG_CHUNK_SIZE = 3500
             val REQUEST_IDS = AtomicLong(0L)
             val RETRY_DELAYS_MS = longArrayOf(300L, 900L)
             val RETRYABLE_HTTP_STATUS_CODES = setOf(429, 500, 502, 503, 504)
             val JSON_MEDIA_TYPE = "application/json".toMediaType()
+            const val GENERATE_CONTENT_SUFFIX = ":generateContent"
+            const val COUNT_TOKENS_SUFFIX = ":countTokens"
             val MODEL_NAME_PATTERN = Regex("[A-Za-z0-9._-]+")
             val MODEL_PATH_REGEX = Regex("/models/([^/:]+):")
         }
+
+        private data class SlidingTokenWindow(
+            val messages: List<AgentMessage>,
+            val promptTokens: Int?,
+            val isTrimmed: Boolean,
+        )
     }

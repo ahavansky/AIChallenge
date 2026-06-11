@@ -43,6 +43,24 @@ data class GenerateContentRequest(
 }
 
 @Serializable
+data class CountTokensRequest(
+    val contents: List<GeminiContentDto>,
+) {
+    companion object {
+        fun fromMessages(messages: List<AgentMessage>): CountTokensRequest =
+            CountTokensRequest(
+                contents = GenerateContentRequest.fromMessages(messages).contents,
+            )
+    }
+}
+
+@Serializable
+data class CountTokensResponse(
+    @SerialName("totalTokens")
+    val totalTokens: Int? = null,
+)
+
+@Serializable
 data class GeminiGenerationConfigDto(
     @SerialName("responseMimeType")
     val responseMimeType: String? = null,
@@ -93,6 +111,8 @@ data class GeminiPartDto(
 @Serializable
 data class GenerateContentResponse(
     val candidates: List<GeminiCandidateDto> = emptyList(),
+    @SerialName("usageMetadata")
+    val usageMetadata: GeminiUsageMetadataDto? = null,
 )
 
 @Serializable
@@ -101,6 +121,24 @@ data class GeminiCandidateDto(
     @SerialName("finishReason")
     val finishReason: String? = null,
 )
+
+@Serializable
+data class GeminiUsageMetadataDto(
+    @SerialName("promptTokenCount")
+    val promptTokenCount: Int? = null,
+    @SerialName("candidatesTokenCount")
+    val candidatesTokenCount: Int? = null,
+    @SerialName("totalTokenCount")
+    val totalTokenCount: Int? = null,
+)
+
+fun GeminiUsageMetadataDto.toTokenUsage(currentRequestTokens: Int?): GeminiTokenUsage =
+    GeminiTokenUsage(
+        currentRequestTokens = currentRequestTokens,
+        conversationHistoryTokens = promptTokenCount,
+        modelResponseTokens = candidatesTokenCount,
+        totalTokens = totalTokenCount,
+    )
 
 fun GenerateContentResponse.textOrNull(): String? {
     val texts =

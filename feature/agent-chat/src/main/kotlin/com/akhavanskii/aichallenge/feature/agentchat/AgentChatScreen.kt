@@ -13,25 +13,35 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.akhavanskii.aichallenge.core.designsystem.ChallengeButton
-import com.akhavanskii.aichallenge.core.designsystem.ResponsePanel
+import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
+import java.util.Locale
 
 @Composable
 fun AgentChatScreen(
@@ -40,14 +50,15 @@ fun AgentChatScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val historyScrollState = rememberScrollState()
+
     Column(
         modifier =
             modifier
                 .fillMaxSize()
                 .padding(WindowInsets.safeDrawing.asPaddingValues())
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -56,26 +67,49 @@ fun AgentChatScreen(
         ) {
             Text(
                 text = "Agent Chat",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
-            TextButton(
-                onClick = onBack,
-                modifier = Modifier.testTag(AgentChatTags.BACK_BUTTON),
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Back")
+                AgentModelMenu(
+                    selectedAgent = state.selectedAgent,
+                    enabled = state.canChangeAgent,
+                    onSelected = { onAction(AgentChatAction.AgentChanged(it)) },
+                )
+                TextButton(
+                    onClick = onBack,
+                    modifier = Modifier.testTag(AgentChatTags.BACK_BUTTON),
+                ) {
+                    Text("Back")
+                }
             }
         }
 
-        AgentSelector(
+        TokenUsageSummary(
             selectedAgent = state.selectedAgent,
-            enabled = state.canChangeAgent,
-            onSelected = { onAction(AgentChatAction.AgentChanged(it)) },
+            tokenUsage = state.latestTokenUsage,
+            customTotalTokenLimit = state.customTotalTokenLimit,
+            enabled = !state.isLoading,
+            onTokenLimitChanged = { onAction(AgentChatAction.TokenLimitChanged(it)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        ScenarioControls(
+            enabled = !state.isLoading,
+            onSelected = { onAction(AgentChatAction.ScenarioSelected(it)) },
+            modifier = Modifier.fillMaxWidth(),
         )
 
         ConversationHistory(
             messages = state.messages,
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(historyScrollState),
         )
 
         OutlinedTextField(
@@ -85,11 +119,11 @@ fun AgentChatScreen(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp)
+                    .heightIn(min = 68.dp)
                     .testTag(AgentChatTags.INPUT),
             label = { Text("Message") },
-            placeholder = { Text("Ask a follow-up question.") },
-            minLines = 4,
+            placeholder = { Text("Ask a follow-up.") },
+            minLines = 2,
             shape = RoundedCornerShape(8.dp),
             colors =
                 OutlinedTextFieldDefaults.colors(
@@ -116,7 +150,71 @@ fun AgentChatScreen(
             ) {
                 Text("Clear chat")
             }
+            TextButton(
+                onClick = { onAction(AgentChatAction.Stop) },
+                enabled = state.canStop,
+                modifier = Modifier.testTag(AgentChatTags.STOP_BUTTON),
+            ) {
+                Text("Stop")
+            }
         }
+    }
+}
+
+@Composable
+private fun TokenUsageSummary(
+    selectedAgent: AgentChatAgentOption,
+    tokenUsage: GeminiTokenUsage?,
+    customTotalTokenLimit: Int?,
+    enabled: Boolean,
+    onTokenLimitChanged: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.TOKEN_USAGE),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+        ) {
+            Text(
+                text = tokenUsage.formatTokenSummary(selectedAgent, customTotalTokenLimit),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        OutlinedTextField(
+            value = customTotalTokenLimit?.toString().orEmpty(),
+            onValueChange = onTokenLimitChanged,
+            enabled = enabled,
+            singleLine = true,
+            modifier =
+                Modifier
+                    .width(128.dp)
+                    .heightIn(min = 52.dp)
+                    .testTag(AgentChatTags.TOKEN_LIMIT_INPUT),
+            label = { Text("Limit", style = MaterialTheme.typography.labelSmall) },
+            placeholder = {
+                Text(
+                    text = selectedAgent.totalTokenLimit.formatTokenCount(),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = MaterialTheme.typography.bodySmall,
+            shape = RoundedCornerShape(8.dp),
+            colors =
+                OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                ),
+        )
     }
 }
 
@@ -133,13 +231,13 @@ private fun ConversationHistory(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (messages.isEmpty()) {
-            ResponsePanel(
+            ChatMessagePanel(
                 title = "Gemini",
                 body = "No messages yet.",
             )
         } else {
             messages.forEachIndexed { index, message ->
-                ResponsePanel(
+                ChatMessagePanel(
                     title =
                         when {
                             message.role == AgentChatRole.USER -> "You"
@@ -155,59 +253,155 @@ private fun ConversationHistory(
     }
 }
 
+@Composable
+private fun ChatMessagePanel(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    isError: Boolean = false,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color =
+            if (isError) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AgentSelector(
-    selectedAgent: AgentChatAgentOption,
+private fun ScenarioControls(
     enabled: Boolean,
-    onSelected: (AgentChatAgentOption) -> Unit,
+    onSelected: (AgentChatScenario) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    FlowRow(
         modifier =
             modifier
                 .fillMaxWidth()
-                .testTag(AgentChatTags.AGENT_SELECTOR),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+                .testTag(AgentChatTags.TOKEN_SCENARIOS),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            text = "Agent",
-            style = MaterialTheme.typography.titleSmall,
+            text = "Live scenarios",
+            modifier = Modifier.align(Alignment.CenterVertically),
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            AgentChatAgentOption.entries.forEach { agent ->
-                FilterChip(
-                    selected = agent == selectedAgent,
-                    onClick = { onSelected(agent) },
-                    enabled = enabled,
-                    label = { Text(agent.title) },
-                    modifier = Modifier.testTag("${AgentChatTags.AGENT_PREFIX}_${agent.name}"),
+        AgentChatScenario.entries.forEach { scenario ->
+            TextButton(
+                onClick = { onSelected(scenario) },
+                enabled = enabled,
+                modifier = Modifier.testTag("${AgentChatTags.SCENARIO_PREFIX}_${scenario.name}"),
+            ) {
+                Text(
+                    text = scenario.title,
+                    style = MaterialTheme.typography.labelMedium,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun AgentModelMenu(
+    selectedAgent: AgentChatAgentOption,
+    enabled: Boolean,
+    onSelected: (AgentChatAgentOption) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    TextButton(
+        onClick = { expanded = true },
+        enabled = enabled,
+        modifier = Modifier.testTag(AgentChatTags.AGENT_MENU_BUTTON),
+    ) {
         Text(
-            text = "${selectedAgent.modelName}: ${selectedAgent.description}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = selectedAgent.title,
+            style = MaterialTheme.typography.labelMedium,
         )
+    }
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+    ) {
+        AgentChatAgentOption.entries.forEach { agent ->
+            DropdownMenuItem(
+                text = { Text(agent.title) },
+                enabled = enabled,
+                onClick = {
+                    expanded = false
+                    onSelected(agent)
+                },
+                modifier = Modifier.testTag("${AgentChatTags.AGENT_PREFIX}_${agent.name}"),
+            )
+        }
     }
 }
 
 object AgentChatTags {
     const val BACK_BUTTON = "agent_chat_back_button"
-    const val AGENT_SELECTOR = "agent_chat_agent_selector"
+    const val AGENT_MENU_BUTTON = "agent_chat_agent_menu_button"
     const val AGENT_PREFIX = "agent_chat_agent"
+    const val SCENARIO_PREFIX = "agent_chat_scenario"
     const val INPUT = "agent_chat_input"
     const val SEND_BUTTON = "agent_chat_send_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
+    const val STOP_BUTTON = "agent_chat_stop_button"
     const val HISTORY = "agent_chat_history"
     const val MESSAGE = "agent_chat_message"
+    const val TOKEN_USAGE = "agent_chat_token_usage"
+    const val TOKEN_LIMIT_INPUT = "agent_chat_token_limit_input"
+    const val TOKEN_SCENARIOS = "agent_chat_token_scenarios"
 }
+
+private fun GeminiTokenUsage?.formatTokenSummary(
+    selectedAgent: AgentChatAgentOption,
+    customTotalTokenLimit: Int?,
+): String {
+    val usedTokens = this?.totalTokens
+    val effectiveLimit = customTotalTokenLimit ?: selectedAgent.totalTokenLimit
+    val limitSource = if (customTotalTokenLimit == null) "model" else "custom"
+    val remainingTokens = usedTokens?.let { (effectiveLimit - it).coerceAtLeast(0) }
+    val windowStatus =
+        if (this?.slidingWindowApplied == true) {
+            "sliding applied"
+        } else {
+            "sliding ready"
+        }
+    return "Req/history/resp: ${this?.currentRequestTokens.formatTokenCount()} / " +
+        "${this?.conversationHistoryTokens.formatTokenCount()} / ${this?.modelResponseTokens.formatTokenCount()}\n" +
+        "Total/limit: ${usedTokens.formatTokenCount()} / ${effectiveLimit.formatTokenCount()} ($limitSource), " +
+        "left ${remainingTokens.formatTokenCount()}\n" +
+        "Window: $windowStatus | max ${selectedAgent.totalTokenLimit.formatTokenCount()}"
+}
+
+private fun Int?.formatTokenCount(): String = this?.let { String.format(Locale.US, "%,d", it) } ?: "unknown"
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 840)
 @Composable
@@ -240,6 +434,13 @@ fun AgentChatConversationPreview() {
                             AgentChatMessage(
                                 role = AgentChatRole.MODEL,
                                 text = "Navigation state is represented by a back stack of typed keys.",
+                                tokenUsage =
+                                    GeminiTokenUsage(
+                                        currentRequestTokens = 8,
+                                        conversationHistoryTokens = 22,
+                                        modelResponseTokens = 13,
+                                        totalTokens = 35,
+                                    ),
                             ),
                         ),
                 ),

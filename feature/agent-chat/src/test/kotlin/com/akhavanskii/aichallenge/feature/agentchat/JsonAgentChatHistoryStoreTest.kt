@@ -1,5 +1,6 @@
 package com.akhavanskii.aichallenge.feature.agentchat
 
+import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -25,10 +26,21 @@ class JsonAgentChatHistoryStoreTest {
             val snapshot =
                 AgentChatHistorySnapshot(
                     selectedAgent = AgentChatAgentOption.GEMINI_2_5_FLASH_LITE,
+                    customTotalTokenLimit = 12_345,
                     messages =
                         listOf(
                             AgentChatMessage(role = AgentChatRole.USER, text = "Remember this"),
-                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Stored answer"),
+                            AgentChatMessage(
+                                role = AgentChatRole.MODEL,
+                                text = "Stored answer",
+                                tokenUsage =
+                                    GeminiTokenUsage(
+                                        currentRequestTokens = 3,
+                                        conversationHistoryTokens = 9,
+                                        modelResponseTokens = 4,
+                                        totalTokens = 13,
+                                    ),
+                            ),
                             AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting", isLoading = true),
                         ),
                 )

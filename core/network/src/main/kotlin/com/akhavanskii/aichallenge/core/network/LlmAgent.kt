@@ -19,16 +19,19 @@ interface LlmAgent {
         prompt: String,
         generationConfig: GeminiGenerationConfig? = null,
         modelName: String? = null,
+        totalTokenLimit: Int? = null,
     ): AgentResult<String> =
         sendMessage(
             messages = listOf(AgentMessage.User(prompt)),
             generationConfig = generationConfig,
             modelName = modelName,
+            totalTokenLimit = totalTokenLimit,
         )
 
     suspend fun sendMessage(
         messages: List<AgentMessage>,
         generationConfig: GeminiGenerationConfig? = null,
         modelName: String? = null,
+        totalTokenLimit: Int? = null,
     ): AgentResult<String>
 }

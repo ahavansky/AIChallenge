@@ -78,6 +78,85 @@ class GeminiAgentTest {
         }
 
     @Test
+    fun sendMessageMapsTokenUsageForCurrentRequestHistoryAndModelResponse() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    if (request.url.toString().endsWith(":countTokens")) {
+                        jsonResponse(
+                            request = request,
+                            body = """{"totalTokens":4}""",
+                        )
+                    } else {
+                        jsonResponse(
+                            request = request,
+                            body =
+                                """
+                                {
+                                  "candidates": [
+                                    {
+                                      "content": {
+                                        "parts": [
+                                          {"text": "Follow-up answer"}
+                                        ]
+                                      }
+                                    }
+                                  ],
+                                  "usageMetadata": {
+                                    "promptTokenCount": 14,
+                                    "candidatesTokenCount": 6,
+                                    "totalTokenCount": 20
+                                  }
+                                }
+                                """.trimIndent(),
+                        )
+                    }
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.sendMessage(
+                    messages =
+                        listOf(
+                            AgentMessage.User("First question"),
+                            AgentMessage.Model("First answer"),
+                            AgentMessage.User("Follow-up"),
+                        ),
+                    generationConfig = null,
+                )
+
+            assertEquals(
+                GeminiResult.Success(
+                    value = "Follow-up answer",
+                    tokenUsage =
+                        GeminiTokenUsage(
+                            currentRequestTokens = 4,
+                            conversationHistoryTokens = 14,
+                            modelResponseTokens = 6,
+                            totalTokens = 20,
+                        ),
+                ),
+                result,
+            )
+            assertEquals(2, factory.callCount)
+            assertTrue(
+                factory.requests[0]
+                    .url
+                    .toString()
+                    .endsWith(":countTokens"),
+            )
+            assertTrue(factory.requests[0].bodyString().contains("\"text\":\"Follow-up\""))
+            assertFalse(factory.requests[0].bodyString().contains("First answer"))
+            assertTrue(
+                factory.requests[1]
+                    .url
+                    .toString()
+                    .endsWith(":generateContent"),
+            )
+            assertTrue(factory.requests[1].bodyString().contains("\"text\":\"First answer\""))
+        }
+
+    @Test
     fun sendMessageSerializesAccumulatedChatHistory() =
         runTest {
             val factory =
@@ -107,6 +186,89 @@ class GeminiAgentTest {
             assertTrue(body.contains("\"text\":\"First question\""))
             assertTrue(body.contains("\"text\":\"First answer\""))
             assertTrue(body.contains("\"text\":\"Follow-up\""))
+        }
+
+    @Test
+    fun sendMessageAppliesSlidingWindowWhenTokenLimitIsExceeded() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    if (request.url.toString().endsWith(":countTokens")) {
+                        val body = request.bodyString()
+                        val totalTokens =
+                            when {
+                                body.contains("First question") -> 30
+                                body.contains("Second question") -> 18
+                                body.contains("Follow-up") -> 4
+                                else -> 1
+                            }
+                        jsonResponse(
+                            request = request,
+                            body = """{"totalTokens":$totalTokens}""",
+                        )
+                    } else {
+                        jsonResponse(
+                            request = request,
+                            body =
+                                """
+                                {
+                                  "candidates": [
+                                    {
+                                      "content": {
+                                        "parts": [
+                                          {"text": "Windowed answer"}
+                                        ]
+                                      }
+                                    }
+                                  ],
+                                  "usageMetadata": {
+                                    "promptTokenCount": 18,
+                                    "candidatesTokenCount": 2,
+                                    "totalTokenCount": 20
+                                  }
+                                }
+                                """.trimIndent(),
+                        )
+                    }
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.sendMessage(
+                    messages =
+                        listOf(
+                            AgentMessage.User("First question"),
+                            AgentMessage.Model("First answer"),
+                            AgentMessage.User("Second question"),
+                            AgentMessage.Model("Second answer"),
+                            AgentMessage.User("Follow-up"),
+                        ),
+                    generationConfig = null,
+                    totalTokenLimit = 20,
+                )
+
+            assertEquals(
+                GeminiResult.Success(
+                    value = "Windowed answer",
+                    tokenUsage =
+                        GeminiTokenUsage(
+                            currentRequestTokens = 4,
+                            conversationHistoryTokens = 18,
+                            modelResponseTokens = 2,
+                            totalTokens = 20,
+                            slidingWindowApplied = true,
+                        ),
+                ),
+                result,
+            )
+            assertEquals(4, factory.callCount)
+            val generateBody = factory.lastRequest?.bodyString().orEmpty()
+            assertFalse(generateBody.contains("First question"))
+            assertFalse(generateBody.contains("First answer"))
+            assertTrue(generateBody.contains("Second question"))
+            assertTrue(generateBody.contains("Second answer"))
+            assertTrue(generateBody.contains("Follow-up"))
+            assertTrue(generateBody.contains("\"maxOutputTokens\":2"))
         }
 
     @Test
@@ -367,10 +529,12 @@ class GeminiAgentTest {
             private set
         var lastRequest: Request? = null
             private set
+        val requests = mutableListOf<Request>()
 
         override fun newCall(request: Request): Call {
             callCount += 1
             lastRequest = request
+            requests += request
             return FakeCall(request) { responseFactory(request) }
         }
     }

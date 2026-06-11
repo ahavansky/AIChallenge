@@ -82,6 +82,23 @@ class GeminiDtosTest {
     }
 
     @Test
+    fun countTokensRequestSerializesMessagesWithoutGenerationConfig() {
+        val encoded =
+            json.encodeToString(
+                CountTokensRequest.fromMessages(
+                    listOf(
+                        AgentMessage.User("Current request"),
+                    ),
+                ),
+            )
+
+        assertTrue(encoded.contains("\"contents\""))
+        assertTrue(encoded.contains("\"role\":\"user\""))
+        assertTrue(encoded.contains("\"text\":\"Current request\""))
+        assertFalse(encoded.contains("generationConfig"))
+    }
+
+    @Test
     fun textOrNullReturnsFirstNonBlankPart() {
         val decoded =
             json.decodeFromString<GenerateContentResponse>(
@@ -102,6 +119,41 @@ class GeminiDtosTest {
             )
 
         assertEquals("Useful answer", decoded.textOrNull())
+    }
+
+    @Test
+    fun usageMetadataMapsToTokenUsage() {
+        val decoded =
+            json.decodeFromString<GenerateContentResponse>(
+                """
+                {
+                  "candidates": [
+                    {
+                      "content": {
+                        "parts": [
+                          {"text": "Useful answer"}
+                        ]
+                      }
+                    }
+                  ],
+                  "usageMetadata": {
+                    "promptTokenCount": 11,
+                    "candidatesTokenCount": 7,
+                    "totalTokenCount": 18
+                  }
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals(
+            GeminiTokenUsage(
+                currentRequestTokens = 3,
+                conversationHistoryTokens = 11,
+                modelResponseTokens = 7,
+                totalTokens = 18,
+            ),
+            decoded.usageMetadata?.toTokenUsage(currentRequestTokens = 3),
+        )
     }
 
     @Test

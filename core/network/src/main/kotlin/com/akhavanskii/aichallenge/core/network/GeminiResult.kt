@@ -1,13 +1,33 @@
 package com.akhavanskii.aichallenge.core.network
 
+import kotlinx.serialization.Serializable
+
 sealed interface GeminiResult<out T> {
     data class Success<T>(
         val value: T,
+        val tokenUsage: GeminiTokenUsage? = null,
     ) : GeminiResult<T>
 
     data class Failure(
         val error: GeminiNetworkError,
     ) : GeminiResult<Nothing>
+}
+
+@Serializable
+data class GeminiTokenUsage(
+    val currentRequestTokens: Int? = null,
+    val conversationHistoryTokens: Int? = null,
+    val modelResponseTokens: Int? = null,
+    val totalTokens: Int? = null,
+    val slidingWindowApplied: Boolean = false,
+) {
+    val hasAnyCount: Boolean
+        get() =
+            currentRequestTokens != null ||
+                conversationHistoryTokens != null ||
+                modelResponseTokens != null ||
+                totalTokens != null ||
+                slidingWindowApplied
 }
 
 sealed interface GeminiNetworkError {
