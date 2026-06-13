@@ -8,6 +8,7 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.ui.NavDisplay
 import com.akhavanskii.aichallenge.feature.agentchat.AgentChatRoute
+import com.akhavanskii.aichallenge.feature.contextagent.ContextAgentRoute
 import com.akhavanskii.aichallenge.feature.home.HomeRoute
 import com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute
 import com.akhavanskii.aichallenge.feature.promptlab.PromptLabRoute
@@ -19,6 +20,9 @@ data object HomeDestination : NavKey
 
 @Serializable
 data object AgentChatDestination : NavKey
+
+@Serializable
+data object ContextAgentDestination : NavKey
 
 @Serializable
 data object PromptLabDestination : NavKey
@@ -47,6 +51,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                     NavEntry(key) {
                         HomeRoute(
                             onOpenAgentChat = { backStack.add(AgentChatDestination) },
+                            onOpenContextAgent = { backStack.add(ContextAgentDestination) },
                             onOpenPromptLab = { backStack.add(PromptLabDestination) },
                             onOpenTemperatureLab = { backStack.add(TemperatureLabDestination) },
                             onOpenHuggingFaceLab = { backStack.add(HuggingFaceLabDestination) },
@@ -55,6 +60,16 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                 AgentChatDestination ->
                     NavEntry(key) {
                         AgentChatRoute(
+                            onBack = {
+                                if (backStack.size > 1) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
+                        )
+                    }
+                ContextAgentDestination ->
+                    NavEntry(key) {
+                        ContextAgentRoute(
                             onBack = {
                                 if (backStack.size > 1) {
                                     backStack.removeLastOrNull()
@@ -96,6 +111,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                     NavEntry(key) {
                         HomeRoute(
                             onOpenAgentChat = {},
+                            onOpenContextAgent = {},
                             onOpenPromptLab = {},
                             onOpenTemperatureLab = {},
                             onOpenHuggingFaceLab = {},

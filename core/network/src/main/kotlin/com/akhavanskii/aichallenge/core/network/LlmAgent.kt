@@ -15,6 +15,11 @@ sealed interface AgentMessage {
 }
 
 interface LlmAgent {
+    suspend fun countTokens(
+        messages: List<AgentMessage>,
+        modelName: String? = null,
+    ): AgentResult<Int> = GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
+
     suspend fun sendMessage(
         prompt: String,
         generationConfig: GeminiGenerationConfig? = null,

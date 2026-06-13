@@ -19,6 +19,7 @@ dependencies {
   kover(project(":core:utils"))
   kover(project(":core:network"))
   kover(project(":feature:home"))
+  kover(project(":feature:context-agent"))
   kover(project(":feature:huggingface-lab"))
   kover(project(":feature:prompt-lab"))
   kover(project(":feature:temperature-lab"))
@@ -34,6 +35,9 @@ kover {
           "com.akhavanskii.aichallenge.feature.home.HomeRoute*",
           "com.akhavanskii.aichallenge.feature.home.HomeScreen*",
           "com.akhavanskii.aichallenge.feature.home.HomeTags*",
+          "com.akhavanskii.aichallenge.feature.contextagent.ContextAgentRoute*",
+          "com.akhavanskii.aichallenge.feature.contextagent.ContextAgentScreen*",
+          "com.akhavanskii.aichallenge.feature.contextagent.ContextAgentTags*",
           "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute*",
           "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabScreen*",
           "com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabTags*",

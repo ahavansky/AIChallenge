@@ -26,6 +26,52 @@ class GeminiAgent
         private val json: Json,
         @param:NetworkDispatcher private val dispatcher: CoroutineDispatcher,
     ) : LlmAgent {
+        override suspend fun countTokens(
+            messages: List<AgentMessage>,
+            modelName: String?,
+        ): AgentResult<Int> {
+            val normalizedMessages = messages.normalized()
+            if (normalizedMessages.isEmpty()) {
+                Timber.tag(LOG_TAG).w("Gemini token count skipped: empty prompt.")
+                return GeminiResult.Failure(GeminiNetworkError.EmptyPrompt)
+            }
+            if (apiKey.isBlank()) {
+                Timber.tag(LOG_TAG).w("Gemini token count skipped: missing API key.")
+                return GeminiResult.Failure(GeminiNetworkError.MissingApiKey)
+            }
+
+            val requestId = REQUEST_IDS.incrementAndGet()
+            return withContext(dispatcher) {
+                runCatching {
+                    val requestEndpoint = endpoint.withModelName(modelName, requestId)
+                    val tokenCount =
+                        countTokensOrNull(
+                            requestId = requestId,
+                            requestEndpoint = requestEndpoint,
+                            messages = normalizedMessages,
+                        )
+                    tokenCount
+                        ?.let { GeminiResult.Success(it) }
+                        ?: GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
+                }.getOrElse { throwable ->
+                    Timber
+                        .tag(LOG_TAG)
+                        .e(
+                            throwable,
+                            "Gemini token count #%d failed before a parsed result. messages=%d",
+                            requestId,
+                            normalizedMessages.size,
+                        )
+                    when (throwable) {
+                        is CancellationException -> throw throwable
+                        is IOException -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
+                        is SerializationException -> GeminiResult.Failure(GeminiNetworkError.Serialization(throwable.message))
+                        else -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
+                    }
+                }
+            }
+        }
+
         override suspend fun sendMessage(
             messages: List<AgentMessage>,
             generationConfig: GeminiGenerationConfig?,
@@ -91,7 +137,7 @@ class GeminiAgent
                     requestEndpoint = requestEndpoint,
                     totalTokenLimit = tokenLimit,
                 )
-            val maxOutputTokens =
+            val tokenWindowOutputBudget =
                 tokenLimit?.let { limit ->
                     tokenWindow.promptTokens?.let { promptTokens ->
                         (limit - promptTokens).coerceAtLeast(MIN_OUTPUT_TOKEN_BUDGET)
@@ -99,8 +145,9 @@ class GeminiAgent
                 }
             val effectiveGenerationConfig =
                 generationConfig
-                    .withMaxOutputTokens(maxOutputTokens)
+                    .withMaxOutputTokens(tokenWindowOutputBudget)
                     ?.withoutUnsupportedFields(requestId, requestEndpoint)
+            val maxOutputTokens = effectiveGenerationConfig?.maxOutputTokens
             val requestJson =
                 json.encodeToString(
                     GenerateContentRequest.fromMessages(

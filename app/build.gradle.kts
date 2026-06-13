@@ -84,6 +84,7 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(project(":core:network"))
     implementation(project(":feature:agent-chat"))
+    implementation(project(":feature:context-agent"))
     implementation(project(":feature:home"))
     implementation(project(":feature:huggingface-lab"))
     implementation(project(":feature:prompt-lab"))

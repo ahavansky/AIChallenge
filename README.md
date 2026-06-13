@@ -4,7 +4,7 @@ AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Comp
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, token usage collection, HTTP execution, response parsing, retries, and user-facing error mapping. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
+The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, token usage collection, HTTP execution, response parsing, retries, and user-facing error mapping. Context Agent is a separate compressed-history agent feature that keeps recent turns raw, stores older context as a rolling summary, and compares token use and answer quality before and after compression. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
 
 Modules:
 
@@ -15,6 +15,7 @@ Modules:
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
 - `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
+- `:feature:context-agent` - Separate compressed-history agent screen, rolling summary persistence, token comparison, quality comparison workflow, Compose UI, and tests.
 - `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Home ViewModel, Compose UI, UI tests, and screenshot tests.
 - `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
@@ -83,6 +84,24 @@ After the first valid user message, the selected agent is locked for that chat. 
 
 Agent Chat keeps token usage in a compact summary above the conversation history so it remains visible while the user scrolls through the chat. The panel shows the latest user request from Gemini `countTokens`, the full dialogue context sent to Gemini from `usageMetadata.promptTokenCount`, the model response from `usageMetadata.candidatesTokenCount`, the total request usage from `usageMetadata.totalTokenCount`, and the active total-token budget with remaining tokens. Users can set a custom total-token budget for the chat; leaving that field blank uses the selected model's documented limit. The current Gemini Flash agents use the documented `1,048,576` input token limit plus `65,536` output token limit. The Gemma 4 agents use `262,144` context tokens plus `128,000` max output tokens from the current Gemma 4 model cards. The screen also includes interactive token scenario buttons for a short dialog, a long dialog, and a dialog that exceeds the model limit. Each scenario starts an automated real-agent conversation through the selected Gemini model so users can watch token/cost growth and active-budget overflow; only the over-limit scenario exercises the sliding-window fallback. The long-dialog and over-limit scenarios temporarily switch to a compact demo budget and inject bounded memory blocks so the accumulated-history overflow path is reproducible regardless of the configured chat limit without making the current prompt exceed the scenario budget. The active request or scenario can be stopped from the screen. Tests use fake agents; the app path uses real LLM calls.
 
+## Context Agent
+
+Context Agent is a separate feature module and screen, not a mode inside Agent Chat. It reuses the shared `LlmAgent` transport but owns its own UI state, JSON history file, ViewModel, Compose screen, and tests. The screen includes the same model options as Agent Chat:
+
+- `gemini-3.5-flash`
+- `gemini-2.5-flash`
+- `gemini-2.5-flash-lite`
+- `gemma-4-26b-a4b-it`
+- `gemma-4-31b-it`
+
+Normal sends use compressed history by default. The ViewModel keeps the latest `8` successful `user`/`model` messages exactly as written. Older successful turns are folded into a rolling summary in batches of up to `10` messages. The summary is stored separately from the chat messages in `context_agent_history.json`, then injected into the Gemini request as prior context followed by the latest raw messages. Loading and error messages are never summarized or sent as context.
+
+Before sending the compressed request, Context Agent calls Gemini `countTokens` for both payloads: the full-history payload and the compressed payload. The UI shows prompt tokens before and after compression, saved tokens, saved percent, summarized message count, raw message count, and the request message count. The response itself is generated only from the compressed payload, so the normal agent path saves prompt tokens.
+Context Agent passes each model's input window as the request token limit and sets an explicit output budget for generated answers. This prevents Gemma requests from asking for extremely large `maxOutputTokens` values when the prompt is small.
+
+The Compare modes action runs the next user input as a dialog turn: one visible answer without compression, one visible answer with summary plus recent raw turns, and a final evaluator message that compares answer quality and reports token use before and after compression. Only the compressed answer becomes part of the future dialog context; the full-history answer and evaluator message stay visible for inspection but are excluded from future prompts.
+Gemini models use a larger comparison output budget to avoid truncation from thinking tokens; Gemma models use a smaller comparison budget because long-output Gemma requests can return provider-side 500 errors. If `gemma-4-31b-it` still returns HTTP 500 on a small request, Context Agent shows it as provider/model availability instead of a context-compression failure.
+
 ## Prompt Lab
 
 Prompt Lab includes a model selector for the main current free-tier Gemini Developer API text models:
@@ -131,7 +150,7 @@ After all successful and failed HuggingFace results are collected, the selected 
 
 ## Network Choice
 
-The Gemini and HuggingFace integrations use OkHttp plus kotlinx.serialization. Agent Chat goes through `LlmAgent`; `GeminiTextClient` remains as a small compatibility adapter for Home and lab screens that already share the same Gemini transport. OkHttp keeps the direct REST calls small, explicit, and easy to test with a fake `Call.Factory`; adding Retrofit or Ktor would add more abstraction than these endpoints need.
+The Gemini and HuggingFace integrations use OkHttp plus kotlinx.serialization. Agent Chat and Context Agent go through `LlmAgent`; `GeminiTextClient` remains as a small compatibility adapter for Home and lab screens that already share the same Gemini transport. `LlmAgent.countTokens` uses Gemini `:countTokens` so agent features can compare prompt size before generation. OkHttp keeps the direct REST calls small, explicit, and easy to test with a fake `Call.Factory`; adding Retrofit or Ktor would add more abstraction than these endpoints need.
 
 The REST clients retry temporary LLM HTTP failures up to 3 attempts for `429`, `500`, `502`, `503`, and `504`. Validation/configuration errors such as `400 INVALID_ARGUMENT` are not retried.
 

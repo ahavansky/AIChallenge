@@ -157,6 +157,64 @@ class GeminiAgentTest {
         }
 
     @Test
+    fun countTokensUsesGeminiCountTokensEndpoint() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        body = """{"totalTokens":42}""",
+                    )
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.countTokens(
+                    messages =
+                        listOf(
+                            AgentMessage.User("First question"),
+                            AgentMessage.Model("First answer"),
+                            AgentMessage.User("Follow-up"),
+                        ),
+                    modelName = "gemini-2.5-flash-lite",
+                )
+
+            assertEquals(GeminiResult.Success(42), result)
+            assertEquals(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:countTokens",
+                factory.lastRequest?.url.toString(),
+            )
+            val body = factory.lastRequest?.bodyString().orEmpty()
+            assertTrue(body.contains("\"text\":\"First question\""))
+            assertTrue(body.contains("\"text\":\"First answer\""))
+            assertTrue(body.contains("\"text\":\"Follow-up\""))
+        }
+
+    @Test
+    fun countTokensReturnsEmptyPromptWithoutNetworkCall() =
+        runTest {
+            val factory = FakeCallFactory { error("network should not be called") }
+            val client = client(apiKey = "key", factory = factory)
+
+            val result = client.countTokens(listOf(AgentMessage.User(" ")))
+
+            assertEquals(GeminiResult.Failure(GeminiNetworkError.EmptyPrompt), result)
+            assertEquals(0, factory.callCount)
+        }
+
+    @Test
+    fun countTokensReturnsMissingApiKeyWithoutNetworkCall() =
+        runTest {
+            val factory = FakeCallFactory { error("network should not be called") }
+            val client = client(apiKey = "", factory = factory)
+
+            val result = client.countTokens(listOf(AgentMessage.User("Hello")))
+
+            assertEquals(GeminiResult.Failure(GeminiNetworkError.MissingApiKey), result)
+            assertEquals(0, factory.callCount)
+        }
+
+    @Test
     fun sendMessageSerializesAccumulatedChatHistory() =
         runTest {
             val factory =
@@ -327,7 +385,8 @@ class GeminiAgentTest {
                         ),
                 )
 
-            assertEquals(GeminiResult.Success("Configured"), result)
+            assertTrue(result is GeminiResult.Success)
+            assertEquals("Configured", (result as GeminiResult.Success).value)
             val body = factory.lastRequest?.bodyString().orEmpty()
             assertTrue(body.contains("\"generationConfig\""))
             assertTrue(body.contains("\"responseMimeType\":\"application/json\""))
@@ -340,6 +399,40 @@ class GeminiAgentTest {
             assertTrue(body.contains("\"candidateCount\":2"))
             assertTrue(body.contains("\"presencePenalty\":0.3"))
             assertTrue(body.contains("\"frequencyPenalty\":0.4"))
+        }
+
+    @Test
+    fun sendMessageKeepsProvidedMaxOutputTokensWhenTokenWindowAllowsMore() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    if (request.url.toString().endsWith(":countTokens")) {
+                        jsonResponse(
+                            request = request,
+                            body = """{"totalTokens":27}""",
+                        )
+                    } else {
+                        jsonResponse(
+                            request = request,
+                            body = """{"candidates":[{"content":{"parts":[{"text":"Configured"}]}}]}""",
+                        )
+                    }
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.sendMessage(
+                    prompt = "Hello",
+                    generationConfig = GeminiGenerationConfig(maxOutputTokens = 1_024),
+                    modelName = "gemma-4-31b-it",
+                    totalTokenLimit = 262_144,
+                )
+
+            assertTrue(result is GeminiResult.Success)
+            assertEquals("Configured", (result as GeminiResult.Success).value)
+            val body = factory.lastRequest?.bodyString().orEmpty()
+            assertTrue(body.contains("\"maxOutputTokens\":1024"))
+            assertFalse(body.contains("\"maxOutputTokens\":262117"))
         }
 
     @Test
