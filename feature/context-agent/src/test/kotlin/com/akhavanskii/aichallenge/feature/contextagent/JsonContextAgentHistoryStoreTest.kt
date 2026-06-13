@@ -26,26 +26,69 @@ class JsonContextAgentHistoryStoreTest {
             val snapshot =
                 ContextAgentHistorySnapshot(
                     selectedModel = ContextAgentModelOption.GEMMA_4_26B_A4B_IT,
-                    contextState =
-                        ContextCompressionState(
-                            summary = "Stored summary",
-                            summarizedMessageCount = 10,
-                            latestStats =
-                                ContextCompressionStats(
-                                    fullPromptTokens = 1_000,
-                                    compressedPromptTokens = 400,
-                                    savedPromptTokens = 600,
-                                    savedPromptPercent = 60,
-                                    summarizedMessageCount = 10,
-                                    rawMessageCount = 8,
-                                    requestMessageCount = 9,
+                    selectedStrategy = ContextManagementStrategy.BRANCHING,
+                    facts =
+                        listOf(
+                            ContextFact("goal", "Collect requirements."),
+                            ContextFact("constraints", "No payments."),
+                        ),
+                    branchingState =
+                        ContextBranchingState(
+                            checkpointMessages =
+                                listOf(
+                                    ContextAgentMessage(role = ContextAgentRole.USER, text = "Shared checkpoint"),
+                                    ContextAgentMessage(role = ContextAgentRole.MODEL, text = "Checkpoint answer"),
                                 ),
+                            branches =
+                                listOf(
+                                    ContextAgentBranch(
+                                        id = ContextBranchId.A,
+                                        messages =
+                                            listOf(
+                                                ContextAgentMessage(role = ContextAgentRole.USER, text = "A"),
+                                                ContextAgentMessage(role = ContextAgentRole.MODEL, text = "A answer"),
+                                            ),
+                                    ),
+                                    ContextAgentBranch(
+                                        id = ContextBranchId.B,
+                                        messages =
+                                            listOf(
+                                                ContextAgentMessage(role = ContextAgentRole.USER, text = "B"),
+                                                ContextAgentMessage(role = ContextAgentRole.MODEL, text = "B answer"),
+                                            ),
+                                    ),
+                                ),
+                            activeBranchId = ContextBranchId.B,
+                            hasCheckpoint = true,
+                        ),
+                    strategyStats =
+                        ContextStrategyStats(
+                            strategy = ContextManagementStrategy.STICKY_FACTS,
+                            fullPromptTokens = 1_000,
+                            strategyPromptTokens = 400,
+                            savedPromptTokens = 600,
+                            savedPromptPercent = 60,
+                            storedMessageCount = 12,
+                            requestMessageCount = 9,
+                            droppedMessageCount = 4,
+                            factsCount = 2,
                         ),
                     comparison =
-                        ContextQualityComparison(
-                            fullHistoryAnswer = "Full",
-                            compressedHistoryAnswer = "Compressed",
-                            evaluation = "Similar quality with fewer tokens.",
+                        ContextScenarioComparison(
+                            reports =
+                                listOf(
+                                    ContextScenarioStrategyReport(
+                                        strategy = ContextManagementStrategy.SLIDING_WINDOW,
+                                        answer = "Sliding answer",
+                                        promptTokens = 300,
+                                        requestMessageCount = 7,
+                                        quality = "Lower",
+                                        stability = "Lower",
+                                        tokenUse = "Lowest",
+                                        userConvenience = "Simple",
+                                    ),
+                                ),
+                            evaluation = "Facts kept more detail.",
                         ),
                     messages =
                         listOf(
@@ -59,11 +102,6 @@ class JsonContextAgentHistoryStoreTest {
                                         modelResponseTokens = 20,
                                         totalTokens = 420,
                                     ),
-                            ),
-                            ContextAgentMessage(
-                                role = ContextAgentRole.MODEL,
-                                text = "Quality comparison",
-                                includeInContext = false,
                             ),
                             ContextAgentMessage(role = ContextAgentRole.MODEL, text = "Waiting", isLoading = true),
                         ),

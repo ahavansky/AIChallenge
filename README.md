@@ -4,7 +4,7 @@ AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Comp
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, token usage collection, HTTP execution, response parsing, retries, and user-facing error mapping. Context Agent is a separate compressed-history agent feature that keeps recent turns raw, stores older context as a rolling summary, and compares token use and answer quality before and after compression. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
+The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, token usage collection, HTTP execution, response parsing, retries, and user-facing error mapping. Context Agent is a separate context-strategy lab that compares Sliding Window, Sticky Facts, and Branching without summaries. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
 
 Modules:
 
@@ -15,7 +15,7 @@ Modules:
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
 - `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
-- `:feature:context-agent` - Separate compressed-history agent screen, rolling summary persistence, token comparison, quality comparison workflow, Compose UI, and tests.
+- `:feature:context-agent` - Separate context-management strategy screen with Sliding Window, Sticky Facts, Branching, scenario comparison, JSON persistence, Compose UI, and tests.
 - `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Home ViewModel, Compose UI, UI tests, and screenshot tests.
 - `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
@@ -94,13 +94,15 @@ Context Agent is a separate feature module and screen, not a mode inside Agent C
 - `gemma-4-26b-a4b-it`
 - `gemma-4-31b-it`
 
-Normal sends use compressed history by default. The ViewModel keeps the latest `8` successful `user`/`model` messages exactly as written. Older successful turns are folded into a rolling summary in batches of up to `10` messages. The summary is stored separately from the chat messages in `context_agent_history.json`, then injected into the Gemini request as prior context followed by the latest raw messages. Loading and error messages are never summarized or sent as context.
+Normal sends use the selected strategy:
 
-Before sending the compressed request, Context Agent calls Gemini `countTokens` for both payloads: the full-history payload and the compressed payload. The UI shows prompt tokens before and after compression, saved tokens, saved percent, summarized message count, raw message count, and the request message count. The response itself is generated only from the compressed payload, so the normal agent path saves prompt tokens.
-Context Agent passes each model's input window as the request token limit and sets an explicit output budget for generated answers. This prevents Gemma requests from asking for extremely large `maxOutputTokens` values when the prompt is small.
+- Sliding Window stores and sends only the latest `8` successful `user`/`model` messages. Older visible chat messages are discarded from that strategy state.
+- Sticky Facts updates a separate key-value facts block after every user message, then sends `facts + latest 8 messages`. Facts capture durable items such as goals, constraints, preferences, decisions, deadlines, budgets, and roles. They are not summaries.
+- Branching lets the user save a checkpoint, create Branch A and Branch B from that checkpoint, switch between branches, and continue each branch independently. The active branch request includes checkpoint messages plus that branch's messages.
 
-The Compare modes action runs the next user input as a dialog turn: one visible answer without compression, one visible answer with summary plus recent raw turns, and a final evaluator message that compares answer quality and reports token use before and after compression. Only the compressed answer becomes part of the future dialog context; the full-history answer and evaluator message stay visible for inspection but are excluded from future prompts.
-Gemini models use a larger comparison output budget to avoid truncation from thinking tokens; Gemma models use a smaller comparison budget because long-output Gemma requests can return provider-side 500 errors. If `gemma-4-31b-it` still returns HTTP 500 on a small request, Context Agent shows it as provider/model availability instead of a context-compression failure.
+Before sending a strategy request, Context Agent calls Gemini `countTokens` for the full payload and the selected strategy payload. The UI shows prompt tokens before and after strategy processing, saved tokens, saved percent, stored message count, request message count, dropped message count, facts count, and active branch when relevant. Context Agent passes each model's input window as the request token limit and sets an explicit output budget for generated answers. This prevents Gemma requests from asking for extremely large `maxOutputTokens` values when the prompt is small.
+
+The Run scenario action uses the same 10-15 turn requirements-gathering scenario for all strategies. It asks the model to produce a final requirements brief with Sliding Window, Sticky Facts, Branch A, and Branch B, then shows answer quality notes, stability notes, prompt-token use, and user-convenience tradeoffs for each run. Gemini models use a larger scenario output budget to avoid truncation from thinking tokens; Gemma models use a smaller budget because long-output Gemma requests can return provider-side 500 errors. If `gemma-4-31b-it` still returns HTTP 500 on a small request, Context Agent shows it as provider/model availability instead of a context-management failure.
 
 ## Prompt Lab
 

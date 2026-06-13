@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+import java.util.Locale
 import javax.inject.Inject
 
 @HiltViewModel
@@ -41,7 +42,10 @@ class ContextAgentViewModel
                         current.copy(
                             messages = snapshot.messages,
                             selectedModel = snapshot.selectedModel,
-                            contextState = snapshot.contextState,
+                            selectedStrategy = snapshot.selectedStrategy,
+                            facts = snapshot.facts,
+                            branchingState = snapshot.branchingState,
+                            strategyStats = snapshot.strategyStats,
                             comparison = snapshot.comparison,
                         )
                     } else {
@@ -53,11 +57,15 @@ class ContextAgentViewModel
 
         fun onAction(action: ContextAgentAction) {
             when (action) {
+                is ContextAgentAction.BranchChanged -> onBranchChanged(action.branchId)
                 ContextAgentAction.Clear -> clear()
+                ContextAgentAction.CreateBranches -> createBranches()
                 is ContextAgentAction.InputChanged -> onInputChanged(action.input)
                 is ContextAgentAction.ModelChanged -> onModelChanged(action.model)
-                ContextAgentAction.RunComparison -> runComparison()
+                ContextAgentAction.RunScenarioComparison -> runScenarioComparison()
+                ContextAgentAction.SaveCheckpoint -> saveCheckpoint()
                 ContextAgentAction.Stop -> stopActiveRequest()
+                is ContextAgentAction.StrategyChanged -> onStrategyChanged(action.strategy)
                 ContextAgentAction.Submit -> submit()
             }
         }
@@ -78,6 +86,71 @@ class ContextAgentViewModel
             }
         }
 
+        private fun onStrategyChanged(strategy: ContextManagementStrategy) {
+            updateStateAndPersist { current ->
+                if (current.canChangeStrategy) {
+                    current.copy(selectedStrategy = strategy)
+                } else {
+                    current
+                }
+            }
+        }
+
+        private fun onBranchChanged(branchId: ContextBranchId) {
+            updateStateAndPersist { current ->
+                if (current.selectedStrategy == ContextManagementStrategy.BRANCHING && !current.isLoading) {
+                    current.copy(branchingState = current.branchingState.copy(activeBranchId = branchId))
+                } else {
+                    current
+                }
+            }
+        }
+
+        private fun saveCheckpoint() {
+            updateStateAndPersist { current ->
+                if (!current.canSaveCheckpoint) {
+                    current
+                } else {
+                    current.copy(
+                        branchingState =
+                            ContextBranchingState(
+                                checkpointMessages = current.activeMessages.filterNot { it.isLoading },
+                                branches = defaultBranches(),
+                                activeBranchId = ContextBranchId.A,
+                                hasCheckpoint = true,
+                            ),
+                        strategyStats = null,
+                    )
+                }
+            }
+        }
+
+        private fun createBranches() {
+            updateStateAndPersist { current ->
+                if (!current.canCreateBranches) {
+                    current
+                } else {
+                    val checkpoint =
+                        if (current.branchingState.hasCheckpoint) {
+                            current.branchingState.checkpointMessages
+                        } else {
+                            current.activeMessages.filterNot { it.isLoading }
+                        }
+                    current.copy(
+                        selectedStrategy = ContextManagementStrategy.BRANCHING,
+                        branchingState =
+                            ContextBranchingState(
+                                checkpointMessages = checkpoint,
+                                branches = defaultBranches(),
+                                activeBranchId = ContextBranchId.A,
+                                hasCheckpoint = true,
+                            ),
+                        strategyStats = null,
+                    )
+                }
+            }
+        }
+
         private fun submit() {
             val currentState = mutableUiState.value
             if (currentState.isLoading) return
@@ -85,63 +158,61 @@ class ContextAgentViewModel
             val prompt = currentState.input.normalizedPromptOrNull()
             if (prompt == null) {
                 mutableUiState.update {
-                    it.copy(
-                        messages =
-                            it.messages +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = "Enter a message before sending.",
-                                    isError = true,
-                                ),
+                    it.withAppendedActiveMessages(
+                        listOf(
+                            ContextAgentMessage(
+                                role = ContextAgentRole.MODEL,
+                                text = "Enter a message before sending.",
+                                isError = true,
+                            ),
+                        ),
                     )
                 }
                 return
             }
 
-            val fullRequestMessages = currentState.messages.toAgentMessages() + AgentMessage.User(prompt)
+            val visibleMessagesBeforeSubmit = currentState.activeMessages
+            val fullRequestMessages = visibleMessagesBeforeSubmit.toAgentMessages() + AgentMessage.User(prompt)
+            val userMessage = ContextAgentMessage(role = ContextAgentRole.USER, text = prompt)
+            val loadingMessage =
+                ContextAgentMessage(
+                    role = ContextAgentRole.MODEL,
+                    text = "Preparing ${currentState.selectedStrategy.title} context for ${currentState.selectedModel.title}",
+                    isLoading = true,
+                )
             val updatedState =
                 mutableUiState.updateAndGet {
-                    it.copy(
-                        input = "",
-                        comparison = null,
-                        messages =
-                            currentState.messages +
-                                ContextAgentMessage(role = ContextAgentRole.USER, text = prompt) +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = "Compressing context for ${currentState.selectedModel.title}",
-                                    isLoading = true,
-                                ),
-                    )
+                    it
+                        .copy(
+                            input = "",
+                            comparison = null,
+                        ).withAppendedActiveMessages(listOf(userMessage, loadingMessage))
                 }
             persistHistory(updatedState)
 
             launchActiveRequest { requestId ->
+                val facts =
+                    if (currentState.selectedStrategy == ContextManagementStrategy.STICKY_FACTS) {
+                        val updatedFacts = updateFactsFromUserMessage(currentState.facts, prompt)
+                        updateFactsAndPersist(requestId, updatedFacts)
+                        updatedFacts
+                    } else {
+                        currentState.facts
+                    }
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+
                 val preparedContext =
-                    prepareCompressedContext(
-                        requestId = requestId,
-                        state = currentState,
+                    prepareStrategyContext(
+                        state = currentState.copy(facts = facts),
                         fullRequestMessages = fullRequestMessages,
                     )
-                val readyContext =
-                    when (preparedContext) {
-                        is PreparedContext.Failure -> {
-                            replaceLoadingMessage(
-                                text =
-                                    "Context compression failed. " +
-                                        currentState.selectedModel.contextAgentErrorMessage(preparedContext.error),
-                                isError = true,
-                            )
-                            return@launchActiveRequest
-                        }
-                        is PreparedContext.Ready -> preparedContext
-                    }
+                updateStatsAndPersist(requestId, preparedContext.stats)
                 if (!isCurrentRequest(requestId)) return@launchActiveRequest
 
                 when (
                     val result =
                         llmAgent.sendMessage(
-                            messages = readyContext.messages,
+                            messages = preparedContext.messages,
                             generationConfig = currentState.selectedModel.chatGenerationConfig(),
                             modelName = currentState.selectedModel.modelName,
                             totalTokenLimit = currentState.selectedModel.inputTokenLimit,
@@ -149,7 +220,11 @@ class ContextAgentViewModel
                 ) {
                     is GeminiResult.Success -> {
                         if (isCurrentRequest(requestId)) {
-                            replaceLoadingMessage(result.value, tokenUsage = result.tokenUsage)
+                            replaceLoadingMessage(
+                                text = result.value,
+                                tokenUsage = result.tokenUsage,
+                                trimSlidingWindow = currentState.selectedStrategy == ContextManagementStrategy.SLIDING_WINDOW,
+                            )
                         }
                     }
                     is GeminiResult.Failure -> {
@@ -157,6 +232,7 @@ class ContextAgentViewModel
                             replaceLoadingMessage(
                                 text = currentState.selectedModel.contextAgentErrorMessage(result.error),
                                 isError = true,
+                                trimSlidingWindow = currentState.selectedStrategy == ContextManagementStrategy.SLIDING_WINDOW,
                             )
                         }
                     }
@@ -164,226 +240,141 @@ class ContextAgentViewModel
             }
         }
 
-        private fun runComparison() {
+        private fun runScenarioComparison() {
             val currentState = mutableUiState.value
             if (currentState.isLoading) return
 
-            val comparisonPrompt = currentState.input.normalizedPromptOrNull()
-            if (comparisonPrompt == null) {
-                mutableUiState.update {
-                    it.copy(
-                        messages =
-                            it.messages +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = "Enter a message before comparing modes.",
-                                    isError = true,
-                                    includeInContext = false,
-                                ),
-                    )
-                }
-                return
-            }
-            val fullRequestMessages = currentState.messages.toAgentMessages() + AgentMessage.User(comparisonPrompt)
-            val updatedState =
+            val startedState =
                 mutableUiState.updateAndGet {
                     it.copy(
-                        input = "",
                         comparison = null,
-                        messages =
-                            currentState.messages +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.USER,
-                                    text = comparisonPrompt,
-                                ) +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text =
-                                        "Comparing full-history and compressed-history answers with " +
-                                            currentState.selectedModel.title,
-                                    isLoading = true,
-                                    includeInContext = false,
-                                ),
+                        strategyStats = null,
+                        isScenarioRunning = true,
                     )
                 }
-            persistHistory(updatedState)
+            persistHistory(startedState)
 
             launchActiveRequest { requestId ->
-                val fullAnswer =
-                    when (
-                        val result =
-                            llmAgent.sendMessage(
-                                messages = fullRequestMessages,
-                                generationConfig = currentState.selectedModel.comparisonGenerationConfig(),
-                                modelName = currentState.selectedModel.modelName,
-                                totalTokenLimit = currentState.selectedModel.inputTokenLimit,
-                            )
-                    ) {
-                        is GeminiResult.Success -> {
-                            if (!isCurrentRequest(requestId)) return@launchActiveRequest
-                            replaceLoadingMessage(
-                                text = "Answer without compression\n\n${result.value}",
-                                tokenUsage = result.tokenUsage,
-                                includeInContext = false,
-                            )
-                            result.value
-                        }
-                        is GeminiResult.Failure -> {
-                            replaceLoadingMessage(
-                                text = currentState.selectedModel.contextAgentErrorMessage(result.error),
-                                isError = true,
-                            )
-                            return@launchActiveRequest
-                        }
-                    }
-
-                val preparedContext =
-                    prepareCompressedContext(
+                val reports =
+                    buildScenarioReports(
                         requestId = requestId,
-                        state =
-                            mutableUiState.value.copy(
-                                selectedModel = currentState.selectedModel,
-                            ),
-                        fullRequestMessages = fullRequestMessages,
+                        model = currentState.selectedModel,
                     )
-                val readyContext =
-                    when (preparedContext) {
-                        is PreparedContext.Failure -> {
-                            appendMessage(
-                                text =
-                                    "Context compression failed. " +
-                                        currentState.selectedModel.contextAgentErrorMessage(preparedContext.error),
-                                isError = true,
-                            )
-                            return@launchActiveRequest
-                        }
-                        is PreparedContext.Ready -> preparedContext
-                    }
-                val compressedAnswer =
-                    when (
-                        val result =
-                            llmAgent.sendMessage(
-                                messages = readyContext.messages,
-                                generationConfig = currentState.selectedModel.comparisonGenerationConfig(),
-                                modelName = currentState.selectedModel.modelName,
-                                totalTokenLimit = currentState.selectedModel.inputTokenLimit,
-                            )
-                    ) {
-                        is GeminiResult.Success -> {
-                            if (!isCurrentRequest(requestId)) return@launchActiveRequest
-                            appendMessage(
-                                text = "Answer with compression\n\n${result.value}",
-                                tokenUsage = result.tokenUsage,
-                                includeInContext = true,
-                            )
-                            result.value
-                        }
-                        is GeminiResult.Failure -> {
-                            appendMessage(
-                                text = currentState.selectedModel.contextAgentErrorMessage(result.error),
-                                isError = true,
-                            )
-                            return@launchActiveRequest
-                        }
-                    }
-
-                val stats = mutableUiState.value.contextState.latestStats
-                val evaluation =
-                    when (
-                        val result =
-                            llmAgent.sendMessage(
-                                prompt =
-                                    buildQualityComparisonPrompt(
-                                        fullAnswer = fullAnswer,
-                                        compressedAnswer = compressedAnswer,
-                                        stats = stats,
-                                    ),
-                                generationConfig = currentState.selectedModel.qualityGenerationConfig(),
-                                modelName = currentState.selectedModel.modelName,
-                                totalTokenLimit = currentState.selectedModel.inputTokenLimit,
-                            )
-                    ) {
-                        is GeminiResult.Success -> result.value
-                        is GeminiResult.Failure -> currentState.selectedModel.contextAgentErrorMessage(result.error)
-                    }
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
 
                 val comparison =
-                    ContextQualityComparison(
-                        fullHistoryAnswer = fullAnswer,
-                        compressedHistoryAnswer = compressedAnswer,
-                        evaluation = evaluation,
+                    ContextScenarioComparison(
+                        reports = reports,
+                        evaluation = buildScenarioEvaluation(reports),
                     )
                 val finishedState =
                     mutableUiState.updateAndGet { current ->
                         current.copy(
                             comparison = comparison,
-                            messages =
-                                current.messages +
-                                    ContextAgentMessage(
-                                        role = ContextAgentRole.MODEL,
-                                        text = "Quality comparison\n\n$evaluation",
-                                        includeInContext = false,
-                                    ),
+                            isScenarioRunning = false,
                         )
                     }
                 persistHistory(finishedState)
             }
         }
 
-        private suspend fun prepareCompressedContext(
+        private suspend fun buildScenarioReports(
             requestId: Long,
+            model: ContextAgentModelOption,
+        ): List<ContextScenarioStrategyReport> {
+            val linearMessages = CONTEXT_REQUIREMENTS_SCENARIO.toMessages()
+            val linearAgentMessages = linearMessages.toAgentMessages() + AgentMessage.User(CONTEXT_SCENARIO_FINAL_PROMPT)
+            val scenarioFacts =
+                CONTEXT_REQUIREMENTS_SCENARIO.fold(emptyList<ContextFact>()) { facts, turn ->
+                    updateFactsFromUserMessage(facts, turn.user)
+                }
+
+            val checkpointMessages = CONTEXT_REQUIREMENTS_SCENARIO.take(8).toMessages()
+            val branchAAgentMessages =
+                checkpointMessages.toAgentMessages() +
+                    CONTEXT_REQUIREMENTS_BRANCH_A.toMessages().toAgentMessages() +
+                    AgentMessage.User(CONTEXT_SCENARIO_FINAL_PROMPT)
+            val branchBAgentMessages =
+                checkpointMessages.toAgentMessages() +
+                    CONTEXT_REQUIREMENTS_BRANCH_B.toMessages().toAgentMessages() +
+                    AgentMessage.User(CONTEXT_SCENARIO_FINAL_PROMPT)
+
+            val requests =
+                listOf(
+                    ScenarioRequest(
+                        strategy = ContextManagementStrategy.SLIDING_WINDOW,
+                        messages = linearAgentMessages.takeRecentContextMessages(),
+                    ),
+                    ScenarioRequest(
+                        strategy = ContextManagementStrategy.STICKY_FACTS,
+                        messages = scenarioFacts.toFactsAgentMessages() + linearAgentMessages.takeRecentContextMessages(),
+                    ),
+                    ScenarioRequest(
+                        strategy = ContextManagementStrategy.BRANCHING,
+                        branchTitle = ContextBranchId.A.title,
+                        messages = branchAAgentMessages,
+                    ),
+                    ScenarioRequest(
+                        strategy = ContextManagementStrategy.BRANCHING,
+                        branchTitle = ContextBranchId.B.title,
+                        messages = branchBAgentMessages,
+                    ),
+                )
+
+            val reports = mutableListOf<ContextScenarioStrategyReport>()
+            for (request in requests) {
+                if (!isCurrentRequest(requestId)) break
+                reports += runScenarioRequest(request = request, model = model)
+            }
+            return reports
+        }
+
+        private suspend fun runScenarioRequest(
+            request: ScenarioRequest,
+            model: ContextAgentModelOption,
+        ): ContextScenarioStrategyReport {
+            val promptTokens =
+                llmAgent
+                    .countTokens(
+                        messages = request.messages,
+                        modelName = model.modelName,
+                    ).successValueOrNull()
+            val answer =
+                when (
+                    val result =
+                        llmAgent.sendMessage(
+                            messages = request.messages,
+                            generationConfig = model.scenarioGenerationConfig(),
+                            modelName = model.modelName,
+                            totalTokenLimit = model.inputTokenLimit,
+                        )
+                ) {
+                    is GeminiResult.Success -> result.value
+                    is GeminiResult.Failure -> model.contextAgentErrorMessage(result.error)
+                }
+            return ContextScenarioStrategyReport(
+                strategy = request.strategy,
+                branchTitle = request.branchTitle,
+                answer = answer,
+                promptTokens = promptTokens,
+                requestMessageCount = request.messages.size,
+                quality = request.strategy.scenarioQuality(request.branchTitle),
+                stability = request.strategy.scenarioStability(request.branchTitle),
+                tokenUse = request.strategy.scenarioTokenUse(promptTokens),
+                userConvenience = request.strategy.scenarioConvenience(),
+            )
+        }
+
+        private suspend fun prepareStrategyContext(
             state: ContextAgentUiState,
             fullRequestMessages: List<AgentMessage>,
         ): PreparedContext {
-            var contextState = state.contextState
-            val rawTailStartIndex = fullRequestMessages.rawTailStartIndex()
-            if (contextState.summarizedMessageCount > rawTailStartIndex) {
-                contextState = ContextCompressionState()
-            }
-            val targetSummarizedCount =
-                rawTailStartIndex.coerceAtLeast(contextState.summarizedMessageCount)
-
-            while (contextState.summarizedMessageCount < targetSummarizedCount) {
-                if (!isCurrentRequest(requestId)) {
-                    return PreparedContext.Ready(fullRequestMessages)
-                }
-
-                val batchEnd =
-                    (contextState.summarizedMessageCount + CONTEXT_AGENT_SUMMARY_BATCH_SIZE)
-                        .coerceAtMost(targetSummarizedCount)
-                val batch = fullRequestMessages.subList(contextState.summarizedMessageCount, batchEnd)
-                when (
-                    val summaryResult =
-                        llmAgent.sendMessage(
-                            prompt =
-                                buildSummaryPrompt(
-                                    existingSummary = contextState.summary,
-                                    messages = batch,
-                                ),
-                            generationConfig = state.selectedModel.summaryGenerationConfig(),
-                            modelName = state.selectedModel.modelName,
-                            totalTokenLimit = state.selectedModel.inputTokenLimit,
-                        )
-                ) {
-                    is GeminiResult.Success -> {
-                        contextState =
-                            contextState.copy(
-                                summary = summaryResult.value.trim().ifBlank { contextState.summary },
-                                summarizedMessageCount = batchEnd,
-                                latestStats = null,
-                            )
-                        updateContextStateAndPersist(requestId, contextState)
-                    }
-                    is GeminiResult.Failure -> return PreparedContext.Failure(summaryResult.error)
-                }
-            }
-
-            val rawMessages = fullRequestMessages.drop(contextState.summarizedMessageCount)
-            val compressedMessages =
-                if (contextState.summary.isBlank()) {
-                    fullRequestMessages
-                } else {
-                    listOf(AgentMessage.User(contextState.summary.toCompressedPrompt())) + rawMessages
+            val strategyMessages =
+                when (state.selectedStrategy) {
+                    ContextManagementStrategy.SLIDING_WINDOW -> fullRequestMessages.takeRecentContextMessages()
+                    ContextManagementStrategy.STICKY_FACTS ->
+                        state.facts.toFactsAgentMessages() + fullRequestMessages.takeRecentContextMessages()
+                    ContextManagementStrategy.BRANCHING -> fullRequestMessages
                 }
             val fullPromptTokens =
                 llmAgent
@@ -391,32 +382,39 @@ class ContextAgentViewModel
                         messages = fullRequestMessages,
                         modelName = state.selectedModel.modelName,
                     ).successValueOrNull()
-            val compressedPromptTokens =
+            val strategyPromptTokens =
                 llmAgent
                     .countTokens(
-                        messages = compressedMessages,
+                        messages = strategyMessages,
                         modelName = state.selectedModel.modelName,
                     ).successValueOrNull()
             val stats =
-                ContextCompressionStats(
+                ContextStrategyStats(
+                    strategy = state.selectedStrategy,
                     fullPromptTokens = fullPromptTokens,
-                    compressedPromptTokens = compressedPromptTokens,
+                    strategyPromptTokens = strategyPromptTokens,
                     savedPromptTokens =
                         fullPromptTokens?.let { full ->
-                            compressedPromptTokens?.let { compressed -> (full - compressed).coerceAtLeast(0) }
+                            strategyPromptTokens?.let { strategy -> (full - strategy).coerceAtLeast(0) }
                         },
                     savedPromptPercent =
                         fullPromptTokens?.takeIf { it > 0 }?.let { full ->
-                            compressedPromptTokens?.let { compressed ->
-                                (((full - compressed).coerceAtLeast(0) * 100L) / full).toInt()
+                            strategyPromptTokens?.let { strategy ->
+                                (((full - strategy).coerceAtLeast(0) * 100L) / full).toInt()
                             }
                         },
-                    summarizedMessageCount = contextState.summarizedMessageCount,
-                    rawMessageCount = rawMessages.size,
-                    requestMessageCount = compressedMessages.size,
+                    storedMessageCount = state.activeMessages.size,
+                    requestMessageCount = strategyMessages.size,
+                    droppedMessageCount = (fullRequestMessages.size - strategyMessages.size).coerceAtLeast(0),
+                    factsCount = state.facts.size,
+                    activeBranchTitle =
+                        if (state.selectedStrategy == ContextManagementStrategy.BRANCHING) {
+                            state.activeBranch.title
+                        } else {
+                            null
+                        },
                 )
-            updateContextStateAndPersist(requestId, contextState.copy(latestStats = stats))
-            return PreparedContext.Ready(compressedMessages)
+            return PreparedContext(messages = strategyMessages, stats = stats)
         }
 
         private fun clear() {
@@ -424,7 +422,10 @@ class ContextAgentViewModel
                 if (current.isLoading) {
                     current
                 } else {
-                    ContextAgentUiState(selectedModel = current.selectedModel)
+                    ContextAgentUiState(
+                        selectedModel = current.selectedModel,
+                        selectedStrategy = current.selectedStrategy,
+                    )
                 }
             }
         }
@@ -437,16 +438,17 @@ class ContextAgentViewModel
             activeRequestJob = null
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages.replaceLastLoading(
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = "Stopped by user.",
-                                    isError = true,
-                                ),
+                    if (current.isScenarioRunning) {
+                        current.copy(isScenarioRunning = false)
+                    } else {
+                        current.withReplacedActiveLoading(
+                            ContextAgentMessage(
+                                role = ContextAgentRole.MODEL,
+                                text = "Stopped by user.",
+                                isError = true,
                             ),
-                    )
+                        )
+                    }
                 }
             persistHistory(updatedState)
         }
@@ -455,57 +457,48 @@ class ContextAgentViewModel
             text: String,
             isError: Boolean = false,
             tokenUsage: GeminiTokenUsage? = null,
-            includeInContext: Boolean = true,
+            trimSlidingWindow: Boolean,
         ) {
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages.replaceLastLoading(
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = text,
-                                    isError = isError,
-                                    tokenUsage = tokenUsage,
-                                    includeInContext = includeInContext,
-                                ),
+                    val replaced =
+                        current.withReplacedActiveLoading(
+                            ContextAgentMessage(
+                                role = ContextAgentRole.MODEL,
+                                text = text,
+                                isError = isError,
+                                tokenUsage = tokenUsage,
                             ),
-                    )
+                        )
+                    if (trimSlidingWindow) {
+                        replaced.copy(messages = replaced.messages.takeLast(CONTEXT_AGENT_RECENT_MESSAGE_COUNT))
+                    } else {
+                        replaced
+                    }
                 }
             persistHistory(updatedState)
         }
 
-        private fun appendMessage(
-            text: String,
-            tokenUsage: GeminiTokenUsage? = null,
-            isError: Boolean = false,
-            includeInContext: Boolean = true,
-        ) {
-            val updatedState =
-                mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages +
-                                ContextAgentMessage(
-                                    role = ContextAgentRole.MODEL,
-                                    text = text,
-                                    tokenUsage = tokenUsage,
-                                    isError = isError,
-                                    includeInContext = includeInContext,
-                                ),
-                    )
-                }
-            persistHistory(updatedState)
-        }
-
-        private fun updateContextStateAndPersist(
+        private fun updateFactsAndPersist(
             requestId: Long,
-            contextState: ContextCompressionState,
+            facts: List<ContextFact>,
         ) {
             if (!isCurrentRequest(requestId)) return
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(contextState = contextState)
+                    current.copy(facts = facts)
+                }
+            persistHistory(updatedState)
+        }
+
+        private fun updateStatsAndPersist(
+            requestId: Long,
+            stats: ContextStrategyStats,
+        ) {
+            if (!isCurrentRequest(requestId)) return
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(strategyStats = stats)
                 }
             persistHistory(updatedState)
         }
@@ -532,6 +525,9 @@ class ContextAgentViewModel
             job.invokeOnCompletion {
                 if (activeRequestId == requestId && activeRequestJob == job) {
                     activeRequestJob = null
+                    mutableUiState.update { current ->
+                        if (current.isScenarioRunning) current.copy(isScenarioRunning = false) else current
+                    }
                 }
             }
             job.start()
@@ -543,34 +539,47 @@ class ContextAgentViewModel
             ContextAgentHistorySnapshot(
                 messages = messages.filterNot { it.isLoading },
                 selectedModel = selectedModel,
-                contextState = contextState,
+                selectedStrategy = selectedStrategy,
+                facts = facts,
+                branchingState =
+                    branchingState.copy(
+                        checkpointMessages = branchingState.checkpointMessages.filterNot { it.isLoading },
+                        branches =
+                            branchingState.branches.map { branch ->
+                                branch.copy(messages = branch.messages.filterNot { it.isLoading })
+                            },
+                    ),
+                strategyStats = strategyStats,
                 comparison = comparison,
             )
 
-        private fun List<ContextAgentMessage>.toAgentMessages(): List<AgentMessage> {
-            val agentMessages = mutableListOf<AgentMessage>()
-            var pendingUserMessage: ContextAgentMessage? = null
-
-            for (message in this) {
-                if (message.isLoading || message.isError) {
-                    pendingUserMessage = null
-                    continue
-                }
-                if (!message.includeInContext) continue
-
-                when (message.role) {
-                    ContextAgentRole.USER -> pendingUserMessage = message
-                    ContextAgentRole.MODEL -> {
-                        val userMessage = pendingUserMessage ?: continue
-                        agentMessages += AgentMessage.User(userMessage.text)
-                        agentMessages += AgentMessage.Model(message.text)
-                        pendingUserMessage = null
-                    }
-                }
+        private fun ContextAgentUiState.withAppendedActiveMessages(newMessages: List<ContextAgentMessage>): ContextAgentUiState =
+            if (selectedStrategy == ContextManagementStrategy.BRANCHING) {
+                copy(branchingState = branchingState.withUpdatedActiveBranch { it + newMessages })
+            } else {
+                copy(messages = messages + newMessages)
             }
 
-            return agentMessages
-        }
+        private fun ContextAgentUiState.withReplacedActiveLoading(message: ContextAgentMessage): ContextAgentUiState =
+            if (selectedStrategy == ContextManagementStrategy.BRANCHING) {
+                copy(branchingState = branchingState.withUpdatedActiveBranch { it.replaceLastLoading(message) })
+            } else {
+                copy(messages = messages.replaceLastLoading(message))
+            }
+
+        private fun ContextBranchingState.withUpdatedActiveBranch(
+            transform: (List<ContextAgentMessage>) -> List<ContextAgentMessage>,
+        ): ContextBranchingState =
+            copy(
+                branches =
+                    branches.map { branch ->
+                        if (branch.id == activeBranchId) {
+                            branch.copy(messages = transform(branch.messages))
+                        } else {
+                            branch
+                        }
+                    },
+            )
 
         private fun List<ContextAgentMessage>.replaceLastLoading(message: ContextAgentMessage): List<ContextAgentMessage> {
             val loadingIndex = indexOfLast { it.isLoading }
@@ -581,8 +590,213 @@ class ContextAgentViewModel
         }
     }
 
-private fun ContextAgentModelOption.summaryGenerationConfig(): GeminiGenerationConfig =
-    GeminiGenerationConfig(maxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS, temperature = 0.1)
+private data class PreparedContext(
+    val messages: List<AgentMessage>,
+    val stats: ContextStrategyStats,
+)
+
+private data class ScenarioRequest(
+    val strategy: ContextManagementStrategy,
+    val messages: List<AgentMessage>,
+    val branchTitle: String? = null,
+)
+
+private data class ContextScenarioTurn(
+    val user: String,
+    val assistant: String,
+)
+
+private fun defaultBranches(): List<ContextAgentBranch> = ContextBranchId.entries.map { branchId -> ContextAgentBranch(id = branchId) }
+
+private fun List<ContextAgentMessage>.toAgentMessages(): List<AgentMessage> {
+    val agentMessages = mutableListOf<AgentMessage>()
+    var pendingUserMessage: ContextAgentMessage? = null
+
+    for (message in this) {
+        if (message.isLoading || message.isError) {
+            pendingUserMessage = null
+            continue
+        }
+
+        when (message.role) {
+            ContextAgentRole.USER -> pendingUserMessage = message
+            ContextAgentRole.MODEL -> {
+                val userMessage = pendingUserMessage ?: continue
+                agentMessages += AgentMessage.User(userMessage.text)
+                agentMessages += AgentMessage.Model(message.text)
+                pendingUserMessage = null
+            }
+        }
+    }
+
+    return agentMessages
+}
+
+private fun List<ContextScenarioTurn>.toMessages(): List<ContextAgentMessage> =
+    flatMap { turn ->
+        listOf(
+            ContextAgentMessage(role = ContextAgentRole.USER, text = turn.user),
+            ContextAgentMessage(role = ContextAgentRole.MODEL, text = turn.assistant),
+        )
+    }
+
+private fun List<AgentMessage>.takeRecentContextMessages(): List<AgentMessage> {
+    val tail = takeLast(CONTEXT_AGENT_RECENT_MESSAGE_COUNT)
+    return if (tail.firstOrNull() is AgentMessage.Model) {
+        tail.drop(1)
+    } else {
+        tail
+    }
+}
+
+private fun List<ContextFact>.toFactsAgentMessages(): List<AgentMessage> =
+    if (isEmpty()) {
+        emptyList()
+    } else {
+        listOf(
+            AgentMessage.User(
+                buildString {
+                    appendLine("Sticky facts memory. Use these key-value facts as durable context; this is not a summary.")
+                    this@toFactsAgentMessages.forEach { fact ->
+                        appendLine("- ${fact.key}: ${fact.value}")
+                    }
+                },
+            ),
+        )
+    }
+
+private fun updateFactsFromUserMessage(
+    existingFacts: List<ContextFact>,
+    userMessage: String,
+): List<ContextFact> {
+    val discoveredFacts = extractFacts(userMessage)
+    if (discoveredFacts.isEmpty()) return existingFacts
+
+    val factMap = linkedMapOf<String, String>()
+    existingFacts.forEach { fact ->
+        factMap[fact.key] = fact.value
+    }
+    discoveredFacts.forEach { fact ->
+        val currentValue = factMap[fact.key]
+        factMap[fact.key] =
+            if (currentValue == null) {
+                fact.value
+            } else {
+                mergeFactValue(currentValue, fact.value)
+            }
+    }
+    return factMap
+        .entries
+        .take(CONTEXT_AGENT_MAX_FACTS)
+        .map { (key, value) -> ContextFact(key = key, value = value) }
+}
+
+private fun extractFacts(userMessage: String): List<ContextFact> {
+    val explicitFacts =
+        userMessage
+            .lineSequence()
+            .mapNotNull { line -> line.toExplicitFactOrNull() }
+            .toList()
+    val sentenceFacts =
+        userMessage
+            .split('.', '\n', ';')
+            .mapNotNull { sentence -> sentence.toKeywordFactOrNull() }
+    return (explicitFacts + sentenceFacts).distinctBy { it.key to it.value }
+}
+
+private fun String.toExplicitFactOrNull(): ContextFact? {
+    val separatorIndex = indexOfFirst { it == ':' || it == '=' }
+    if (separatorIndex !in 1..40) return null
+    val rawKey = take(separatorIndex).trim()
+    val rawValue = drop(separatorIndex + 1).trim()
+    if (rawValue.isBlank()) return null
+    val key = rawKey.normalizedFactKey()
+    return ContextFact(key = key, value = rawValue.cleanFactValue())
+}
+
+private fun String.toKeywordFactOrNull(): ContextFact? {
+    val value = trim().cleanFactValue()
+    if (value.length < 8) return null
+    val lower = value.lowercase(Locale.ROOT)
+    val key =
+        when {
+            lower.containsAny("цель", "goal", "задача", "task") -> "goal"
+            lower.containsAny("огранич", "нельзя", "без ", "constraint", "must not", " no ") -> "constraints"
+            lower.containsAny("предпоч", "важно", "хочу", "желательно", "preference") -> "preferences"
+            lower.containsAny("решили", "решение", "договор", "выбрали", "decision") -> "decisions"
+            lower.containsAny("срок", "deadline", "недел", "date") -> "deadline"
+            lower.containsAny("бюджет", "budget") -> "budget"
+            lower.containsAny("роль", "roles", "пользователь", "курьер", "manager", "админ") -> "roles"
+            else -> null
+        }
+    return key?.let { ContextFact(key = it, value = value) }
+}
+
+private fun String.normalizedFactKey(): String =
+    trim()
+        .lowercase(Locale.ROOT)
+        .replace(Regex("[^a-zа-я0-9]+"), "_")
+        .trim('_')
+        .ifBlank { "fact" }
+
+private fun String.cleanFactValue(): String = trim().replace(Regex("\\s+"), " ").take(MAX_FACT_VALUE_LENGTH)
+
+private fun mergeFactValue(
+    currentValue: String,
+    newValue: String,
+): String =
+    if (currentValue.contains(newValue, ignoreCase = true)) {
+        currentValue
+    } else {
+        "$currentValue; $newValue".take(MAX_FACT_VALUE_LENGTH)
+    }
+
+private fun String.containsAny(vararg needles: String): Boolean = needles.any { needle -> contains(needle) }
+
+private fun ContextManagementStrategy.scenarioQuality(branchTitle: String?): String =
+    when (this) {
+        ContextManagementStrategy.SLIDING_WINDOW ->
+            "Good for the last turns, weaker when the final answer needs early requirements."
+        ContextManagementStrategy.STICKY_FACTS ->
+            "Usually strongest for a requirements brief because durable facts survive window trimming."
+        ContextManagementStrategy.BRANCHING ->
+            "Strong for the selected ${branchTitle ?: "branch"} because alternatives stay isolated."
+    }
+
+private fun ContextManagementStrategy.scenarioStability(branchTitle: String?): String =
+    when (this) {
+        ContextManagementStrategy.SLIDING_WINDOW -> "Lower: old goals and constraints can disappear."
+        ContextManagementStrategy.STICKY_FACTS -> "Higher: goal, constraints, decisions, and preferences remain pinned."
+        ContextManagementStrategy.BRANCHING -> "Higher inside ${branchTitle ?: "each branch"}; cross-branch leakage is avoided."
+    }
+
+private fun ContextManagementStrategy.scenarioTokenUse(promptTokens: Int?): String =
+    when (this) {
+        ContextManagementStrategy.SLIDING_WINDOW -> "Lowest request size: ${promptTokens.formatTokenCount()} prompt tokens."
+        ContextManagementStrategy.STICKY_FACTS -> "Low to medium request size: ${promptTokens.formatTokenCount()} prompt tokens."
+        ContextManagementStrategy.BRANCHING -> "Medium request size per branch: ${promptTokens.formatTokenCount()} prompt tokens."
+    }
+
+private fun ContextManagementStrategy.scenarioConvenience(): String =
+    when (this) {
+        ContextManagementStrategy.SLIDING_WINDOW -> "Simplest for users, but they may need to repeat important details."
+        ContextManagementStrategy.STICKY_FACTS -> "Convenient when facts are visible and editable as a durable memory block."
+        ContextManagementStrategy.BRANCHING -> "More controls, but useful for exploring two independent solution paths."
+    }
+
+private fun buildScenarioEvaluation(reports: List<ContextScenarioStrategyReport>): String =
+    buildString {
+        appendLine("Scenario: collecting a 10-15 turn requirements brief without summaries.")
+        appendLine("Sliding Window is cheapest but can lose early constraints.")
+        appendLine("Sticky Facts keeps the most stable requirement memory for a single linear dialog.")
+        appendLine("Branching is best when the user wants to compare alternatives from one checkpoint.")
+        val tokenLine =
+            reports.joinToString(separator = "; ") { report ->
+                val label = report.branchTitle?.let { "${report.strategy.shortTitle} $it" } ?: report.strategy.shortTitle
+                "$label=${report.promptTokens.formatTokenCount()}"
+            }
+        append("Prompt tokens by run: $tokenLine.")
+    }
 
 private fun ContextAgentModelOption.chatGenerationConfig(): GeminiGenerationConfig =
     GeminiGenerationConfig(
@@ -594,25 +808,15 @@ private fun ContextAgentModelOption.chatGenerationConfig(): GeminiGenerationConf
             },
     )
 
-private fun ContextAgentModelOption.comparisonGenerationConfig(): GeminiGenerationConfig =
+private fun ContextAgentModelOption.scenarioGenerationConfig(): GeminiGenerationConfig =
     GeminiGenerationConfig(
         maxOutputTokens =
             if (isGemma) {
-                GEMMA_COMPARISON_MAX_OUTPUT_TOKENS
+                GEMMA_SCENARIO_MAX_OUTPUT_TOKENS
             } else {
-                COMPARISON_MAX_OUTPUT_TOKENS
+                SCENARIO_MAX_OUTPUT_TOKENS
             },
-    )
-
-private fun ContextAgentModelOption.qualityGenerationConfig(): GeminiGenerationConfig =
-    GeminiGenerationConfig(
-        maxOutputTokens =
-            if (isGemma) {
-                GEMMA_QUALITY_MAX_OUTPUT_TOKENS
-            } else {
-                QUALITY_MAX_OUTPUT_TOKENS
-            },
-        temperature = 0.1,
+        temperature = 0.2,
     )
 
 private val ContextAgentModelOption.isGemma: Boolean
@@ -621,90 +825,98 @@ private val ContextAgentModelOption.isGemma: Boolean
 private fun ContextAgentModelOption.contextAgentErrorMessage(error: GeminiNetworkError): String =
     if (this == ContextAgentModelOption.GEMMA_4_31B_IT && error is GeminiNetworkError.Http && error.statusCode == 500) {
         "Gemma 4 31B returned provider HTTP 500 on a small request. " +
-            "This looks like model availability or provider instability, not context compression. " +
+            "This looks like model availability or provider instability, not context management. " +
             "Try Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, or Gemma 4 26B A4B IT."
     } else {
         error.userMessage
     }
 
-private const val SUMMARY_MAX_OUTPUT_TOKENS = 1_024
-private const val CHAT_MAX_OUTPUT_TOKENS = 4_096
-private const val COMPARISON_MAX_OUTPUT_TOKENS = 4_096
-private const val QUALITY_MAX_OUTPUT_TOKENS = 2_048
-private const val GEMMA_CHAT_MAX_OUTPUT_TOKENS = 1_024
-private const val GEMMA_COMPARISON_MAX_OUTPUT_TOKENS = 1_024
-private const val GEMMA_QUALITY_MAX_OUTPUT_TOKENS = 1_024
-
-private sealed interface PreparedContext {
-    data class Ready(
-        val messages: List<AgentMessage>,
-    ) : PreparedContext
-
-    data class Failure(
-        val error: GeminiNetworkError,
-    ) : PreparedContext
-}
-
-private fun List<AgentMessage>.rawTailStartIndex(): Int {
-    if (size <= CONTEXT_AGENT_RECENT_MESSAGE_COUNT) return 0
-    val defaultStart = size - CONTEXT_AGENT_RECENT_MESSAGE_COUNT
-    return if (getOrNull(defaultStart) is AgentMessage.Model) {
-        (defaultStart - 1).coerceAtLeast(0)
-    } else {
-        defaultStart
-    }
-}
-
-private fun buildSummaryPrompt(
-    existingSummary: String,
-    messages: List<AgentMessage>,
-): String =
-    buildString {
-        appendLine("Update the durable conversation summary for a context-compressed Android AI agent.")
-        appendLine("Keep facts, goals, constraints, decisions, unresolved questions, and user preferences.")
-        appendLine("Remove filler and wording details. Do not invent anything.")
-        appendLine("Return only concise bullet points.")
-        appendLine()
-        appendLine("Existing summary:")
-        appendLine(existingSummary.ifBlank { "- No previous summary." })
-        appendLine()
-        appendLine("New messages to fold into the summary:")
-        messages.forEachIndexed { index, message ->
-            appendLine("${index + 1}. ${message.summaryRoleLabel()}: ${message.text}")
-        }
-    }
-
-private fun String.toCompressedPrompt(): String =
-    "Summary of older conversation turns. Use it as prior context; the latest messages follow verbatim.\n$this"
-
-private fun AgentMessage.summaryRoleLabel(): String =
-    when (this) {
-        is AgentMessage.User -> "User"
-        is AgentMessage.Model -> "Assistant"
-    }
-
 private fun AgentResult<Int>.successValueOrNull(): Int? = (this as? GeminiResult.Success<Int>)?.value
 
-private fun buildQualityComparisonPrompt(
-    fullAnswer: String,
-    compressedAnswer: String,
-    stats: ContextCompressionStats?,
-): String =
-    buildString {
-        appendLine("Compare two answers to the same task.")
-        appendLine("Check whether the compressed-history answer preserved important facts from the full-history answer.")
-        appendLine("Return concise sections: quality without compression, quality with compression, token use before/after, verdict.")
-        appendLine()
-        appendLine(
-            "Token use: full=${stats?.fullPromptTokens?.toString() ?: "unknown"}, " +
-                "compressed=${stats?.compressedPromptTokens?.toString() ?: "unknown"}, " +
-                "saved=${stats?.savedPromptTokens?.toString() ?: "unknown"} " +
-                "(${stats?.savedPromptPercent?.toString() ?: "unknown"}%).",
-        )
-        appendLine()
-        appendLine("Full-history answer:")
-        appendLine(fullAnswer)
-        appendLine()
-        appendLine("Compressed-history answer:")
-        appendLine(compressedAnswer)
-    }
+private fun Int?.formatTokenCount(): String = this?.let { String.format(Locale.US, "%,d", it) } ?: "unknown"
+
+private const val CHAT_MAX_OUTPUT_TOKENS = 4_096
+private const val SCENARIO_MAX_OUTPUT_TOKENS = 4_096
+private const val GEMMA_CHAT_MAX_OUTPUT_TOKENS = 1_024
+private const val GEMMA_SCENARIO_MAX_OUTPUT_TOKENS = 1_024
+private const val MAX_FACT_VALUE_LENGTH = 220
+
+private val CONTEXT_REQUIREMENTS_SCENARIO =
+    listOf(
+        ContextScenarioTurn(
+            user = "Цель: собрать ТЗ для Android-приложения управления доставками.",
+            assistant = "Зафиксировал цель: Android-приложение для доставки.",
+        ),
+        ContextScenarioTurn(
+            user = "Роли: менеджер склада, курьер и администратор.",
+            assistant = "Роли добавлены в требования.",
+        ),
+        ContextScenarioTurn(
+            user = "Ограничение: в MVP не делаем оплату и веб-кабинет.",
+            assistant = "Исключил оплату и веб-кабинет из MVP.",
+        ),
+        ContextScenarioTurn(
+            user = "Важно: приложение должно работать с плохим интернетом и кешировать активный маршрут.",
+            assistant = "Отмечено: офлайн-кеш активного маршрута.",
+        ),
+        ContextScenarioTurn(
+            user = "Решение: авторизация через телефон и одноразовый код.",
+            assistant = "Авторизация через OTP по телефону зафиксирована.",
+        ),
+        ContextScenarioTurn(
+            user = "Курьер должен видеть карту, список точек и менять статусы: в пути, доставлено, проблема.",
+            assistant = "Функции курьера добавлены.",
+        ),
+        ContextScenarioTurn(
+            user = "Менеджер должен назначать заказы курьерам и видеть задержки.",
+            assistant = "Функции менеджера добавлены.",
+        ),
+        ContextScenarioTurn(
+            user = "Предпочтение: интерфейс на русском, Material 3, темная тема обязательна.",
+            assistant = "UI-предпочтения сохранены.",
+        ),
+        ContextScenarioTurn(
+            user = "Срок: MVP нужно показать через 6 недель.",
+            assistant = "Срок MVP зафиксирован.",
+        ),
+        ContextScenarioTurn(
+            user = "Метрики успеха: время доставки, доля проблемных заказов, crash-free sessions.",
+            assistant = "Метрики успеха добавлены.",
+        ),
+        ContextScenarioTurn(
+            user = "Нельзя отправлять реальные персональные данные в LLM.",
+            assistant = "Ограничение приватности зафиксировано.",
+        ),
+        ContextScenarioTurn(
+            user = "Договоренность: сначала делаем только Android, сервер считаем существующим REST API.",
+            assistant = "Договоренность по платформе и API сохранена.",
+        ),
+    )
+
+private val CONTEXT_REQUIREMENTS_BRANCH_A =
+    listOf(
+        ContextScenarioTurn(
+            user = "Ветка A: делаем максимально узкий MVP только для курьера.",
+            assistant = "Ветка A ограничена курьерским MVP.",
+        ),
+        ContextScenarioTurn(
+            user = "Решение ветки A: менеджерские функции заменяем демо-данными.",
+            assistant = "Для ветки A менеджерские функции заменены демо-данными.",
+        ),
+    )
+
+private val CONTEXT_REQUIREMENTS_BRANCH_B =
+    listOf(
+        ContextScenarioTurn(
+            user = "Ветка B: делаем пилот для менеджера и курьера одновременно.",
+            assistant = "Ветка B расширена до менеджера и курьера.",
+        ),
+        ContextScenarioTurn(
+            user = "Решение ветки B: добавляем экран задержек и фильтр по складу.",
+            assistant = "Для ветки B добавлены задержки и фильтр по складу.",
+        ),
+    )
+
+private const val CONTEXT_SCENARIO_FINAL_PROMPT =
+    "Собери итоговое ТЗ в разделах: цель, роли, MVP, ограничения, решения, метрики, риски. " +
+        "Не придумывай отсутствующие детали."

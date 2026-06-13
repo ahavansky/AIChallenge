@@ -7,7 +7,6 @@ import com.akhavanskii.aichallenge.core.network.GeminiNetworkError
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import com.akhavanskii.aichallenge.core.network.LlmAgent
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -23,32 +22,27 @@ class ContextAgentViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun compressedSubmitSummarizesOldMessagesAndSendsSummaryWithRawTail() =
+    fun slidingWindowSubmitSendsAndStoresOnlyRecentMessages() =
         runTest {
             val savedMessages =
-                (1..9).flatMap { index ->
+                (1..5).flatMap { index ->
                     listOf(
                         ContextAgentMessage(role = ContextAgentRole.USER, text = "Question $index"),
                         ContextAgentMessage(role = ContextAgentRole.MODEL, text = "Answer $index"),
                     )
                 }
-            val historyStore =
-                FakeContextAgentHistoryStore(
-                    ContextAgentHistorySnapshot(messages = savedMessages),
-                )
             val fakeAgent =
                 FakeLlmAgent(
                     results =
                         ArrayDeque(
                             listOf(
-                                completedText("Summary through answer 5"),
                                 completedText(
-                                    text = "Compressed final answer",
+                                    text = "Window answer",
                                     tokenUsage =
                                         GeminiTokenUsage(
-                                            conversationHistoryTokens = 420,
-                                            modelResponseTokens = 30,
-                                            totalTokens = 450,
+                                            conversationHistoryTokens = 400,
+                                            modelResponseTokens = 20,
+                                            totalTokens = 420,
                                         ),
                                 ),
                             ),
@@ -56,66 +50,222 @@ class ContextAgentViewModelTest {
                     tokenCountResults =
                         ArrayDeque(
                             listOf(
-                                GeminiResult.Success(1_200),
-                                GeminiResult.Success(420),
+                                GeminiResult.Success(1_000),
+                                GeminiResult.Success(400),
                             ),
                         ),
                 )
-            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore = FakeContextAgentHistoryStore(ContextAgentHistorySnapshot(messages = savedMessages)),
+                )
             runCurrent()
 
-            viewModel.onAction(ContextAgentAction.InputChanged("Next question"))
+            viewModel.onAction(ContextAgentAction.InputChanged("Final question"))
             viewModel.onAction(ContextAgentAction.Submit)
             runCurrent()
 
-            assertEquals(2, fakeAgent.calls.size)
-            assertTrue(
-                fakeAgent.calls[0]
-                    .messages
-                    .single()
-                    .text
-                    .contains("Question 1"),
-            )
-            assertTrue(
-                fakeAgent.calls[0]
-                    .messages
-                    .single()
-                    .text
-                    .contains("Answer 5"),
-            )
-            assertFalse(
-                fakeAgent.calls[0]
-                    .messages
-                    .single()
-                    .text
-                    .contains("Question 6"),
-            )
+            val requestMessages = fakeAgent.calls.single().messages
+            assertFalse(requestMessages.any { it.text == "Question 1" || it.text == "Question 2" })
+            assertTrue(requestMessages.contains(AgentMessage.User("Question 3")))
+            assertTrue(requestMessages.contains(AgentMessage.User("Final question")))
+            assertEquals(7, requestMessages.size)
 
-            val compressedMessages = fakeAgent.calls[1].messages
-            assertTrue((compressedMessages.first() as AgentMessage.User).text.contains("Summary through answer 5"))
-            assertFalse(compressedMessages.any { it.text == "Question 1" || it.text == "Answer 5" })
-            assertTrue(compressedMessages.contains(AgentMessage.User("Question 6")))
-            assertTrue(compressedMessages.contains(AgentMessage.User("Next question")))
+            val state = viewModel.uiState.value
+            assertEquals(CONTEXT_AGENT_RECENT_MESSAGE_COUNT, state.messages.size)
+            assertEquals("Question 3", state.messages.first().text)
+            assertEquals("Window answer", state.messages.last().text)
             assertEquals(
-                ContextCompressionStats(
-                    fullPromptTokens = 1_200,
-                    compressedPromptTokens = 420,
-                    savedPromptTokens = 780,
-                    savedPromptPercent = 65,
-                    summarizedMessageCount = 10,
-                    rawMessageCount = 9,
-                    requestMessageCount = 10,
+                ContextStrategyStats(
+                    strategy = ContextManagementStrategy.SLIDING_WINDOW,
+                    fullPromptTokens = 1_000,
+                    strategyPromptTokens = 400,
+                    savedPromptTokens = 600,
+                    savedPromptPercent = 60,
+                    storedMessageCount = 10,
+                    requestMessageCount = 7,
+                    droppedMessageCount = 4,
                 ),
-                viewModel.uiState.value.contextState.latestStats,
+                state.strategyStats,
             )
-            assertEquals("Summary through answer 5", viewModel.uiState.value.contextState.summary)
+        }
+
+    @Test
+    fun stickyFactsSubmitUpdatesFactsAndSendsFactsWithRecentWindow() =
+        runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results = ArrayDeque(listOf(completedText("Facts answer"))),
+                    tokenCountResults =
+                        ArrayDeque(
+                            listOf(
+                                GeminiResult.Success(120),
+                                GeminiResult.Success(90),
+                            ),
+                        ),
+                )
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore =
+                        FakeContextAgentHistoryStore(
+                            ContextAgentHistorySnapshot(
+                                selectedStrategy = ContextManagementStrategy.STICKY_FACTS,
+                            ),
+                        ),
+                )
+            runCurrent()
+
+            viewModel.onAction(
+                ContextAgentAction.InputChanged(
+                    "Цель собрать ТЗ. Ограничение без оплаты в MVP.",
+                ),
+            )
+            viewModel.onAction(ContextAgentAction.Submit)
+            runCurrent()
+
+            val requestMessages = fakeAgent.calls.single().messages
+            val factsBlock = requestMessages.first() as AgentMessage.User
+            assertTrue(factsBlock.text.contains("Sticky facts memory"))
+            assertTrue(factsBlock.text.contains("- goal:"))
+            assertTrue(factsBlock.text.contains("- constraints:"))
             assertEquals(
-                "Compressed final answer",
+                "Facts answer",
                 viewModel.uiState.value.messages
                     .last()
                     .text,
             )
-            assertEquals(viewModel.uiState.value.contextState, historyStore.snapshot.contextState)
+            assertTrue(
+                viewModel.uiState.value.facts
+                    .any { it.key == "goal" },
+            )
+            assertTrue(
+                viewModel.uiState.value.facts
+                    .any { it.key == "constraints" },
+            )
+            assertEquals(
+                2,
+                viewModel.uiState.value.strategyStats
+                    ?.factsCount,
+            )
+        }
+
+    @Test
+    fun branchingCheckpointKeepsTwoBranchesIndependent() =
+        runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                completedText("Base answer"),
+                                completedText("Branch A answer"),
+                                completedText("Branch B answer"),
+                            ),
+                        ),
+                    tokenCountResults =
+                        ArrayDeque(
+                            listOf(
+                                GeminiResult.Success(10),
+                                GeminiResult.Success(10),
+                                GeminiResult.Success(20),
+                                GeminiResult.Success(20),
+                                GeminiResult.Success(30),
+                                GeminiResult.Success(30),
+                            ),
+                        ),
+                )
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore =
+                        FakeContextAgentHistoryStore(
+                            ContextAgentHistorySnapshot(
+                                selectedStrategy = ContextManagementStrategy.BRANCHING,
+                            ),
+                        ),
+                )
+            runCurrent()
+
+            viewModel.onAction(ContextAgentAction.InputChanged("Shared context"))
+            viewModel.onAction(ContextAgentAction.Submit)
+            runCurrent()
+            viewModel.onAction(ContextAgentAction.SaveCheckpoint)
+            viewModel.onAction(ContextAgentAction.CreateBranches)
+            viewModel.onAction(ContextAgentAction.InputChanged("Branch A decision"))
+            viewModel.onAction(ContextAgentAction.Submit)
+            runCurrent()
+            viewModel.onAction(ContextAgentAction.BranchChanged(ContextBranchId.B))
+            viewModel.onAction(ContextAgentAction.InputChanged("Branch B decision"))
+            viewModel.onAction(ContextAgentAction.Submit)
+            runCurrent()
+
+            val state = viewModel.uiState.value
+            val branchA = state.branchingState.branches.first { it.id == ContextBranchId.A }
+            val branchB = state.branchingState.branches.first { it.id == ContextBranchId.B }
+
+            assertEquals(2, state.branchingState.checkpointMessages.size)
+            assertTrue(branchA.messages.any { it.text == "Branch A answer" })
+            assertFalse(branchA.messages.any { it.text == "Branch B answer" })
+            assertTrue(branchB.messages.any { it.text == "Branch B answer" })
+            assertFalse(branchB.messages.any { it.text == "Branch A answer" })
+            assertEquals(ContextBranchId.B, state.branchingState.activeBranchId)
+            assertTrue(state.activeMessages.any { it.text == "Base answer" })
+            assertTrue(state.activeMessages.any { it.text == "Branch B answer" })
+        }
+
+    @Test
+    fun scenarioComparisonRunsSameScenarioAcrossStrategies() =
+        runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                completedText("Sliding spec"),
+                                completedText("Facts spec"),
+                                completedText("Branch A spec"),
+                                completedText("Branch B spec"),
+                            ),
+                        ),
+                    tokenCountResults =
+                        ArrayDeque(
+                            listOf(
+                                GeminiResult.Success(300),
+                                GeminiResult.Success(420),
+                                GeminiResult.Success(520),
+                                GeminiResult.Success(540),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent = fakeAgent)
+            runCurrent()
+
+            viewModel.onAction(ContextAgentAction.RunScenarioComparison)
+            runCurrent()
+
+            val comparison = viewModel.uiState.value.comparison
+            requireNotNull(comparison)
+            assertEquals(4, fakeAgent.calls.size)
+            assertEquals(4, comparison.reports.size)
+            assertEquals(ContextManagementStrategy.SLIDING_WINDOW, comparison.reports[0].strategy)
+            assertEquals(ContextManagementStrategy.STICKY_FACTS, comparison.reports[1].strategy)
+            assertEquals(ContextManagementStrategy.BRANCHING, comparison.reports[2].strategy)
+            assertEquals(ContextBranchId.A.title, comparison.reports[2].branchTitle)
+            assertEquals(ContextBranchId.B.title, comparison.reports[3].branchTitle)
+
+            assertFalse(fakeAgent.calls[0].messages.any { it.text.contains("Цель: собрать ТЗ") })
+            assertTrue(
+                fakeAgent.calls[1]
+                    .messages
+                    .first()
+                    .text
+                    .contains("Sticky facts memory"),
+            )
+            assertTrue(fakeAgent.calls[2].messages.any { it.text.contains("Ветка A") })
+            assertTrue(fakeAgent.calls[3].messages.any { it.text.contains("Ветка B") })
+            assertTrue(comparison.evaluation.contains("Sliding Window"))
         }
 
     @Test
@@ -123,16 +273,7 @@ class ContextAgentViewModelTest {
         runTest {
             val fakeAgent =
                 FakeLlmAgent(
-                    result =
-                        GeminiResult.Success(
-                            value = "Gemma answer",
-                            tokenUsage =
-                                GeminiTokenUsage(
-                                    conversationHistoryTokens = 27,
-                                    modelResponseTokens = 20,
-                                    totalTokens = 47,
-                                ),
-                        ),
+                    results = ArrayDeque(listOf(completedText("Gemma answer"))),
                     tokenCountResults =
                         ArrayDeque(
                             listOf(
@@ -158,14 +299,10 @@ class ContextAgentViewModelTest {
             runCurrent()
 
             val call = fakeAgent.calls.single()
-            val state = viewModel.uiState.value
-            val lastMessage = state.messages.last()
 
-            assertEquals(1, fakeAgent.calls.size)
             assertEquals(ContextAgentModelOption.GEMMA_4_31B_IT.modelName, call.modelName)
             assertEquals(ContextAgentModelOption.GEMMA_4_31B_IT.inputTokenLimit, call.totalTokenLimit)
             assertEquals(1_024, call.generationConfig?.maxOutputTokens)
-            assertEquals("Gemma answer", lastMessage.text)
         }
 
     @Test
@@ -173,7 +310,12 @@ class ContextAgentViewModelTest {
         runTest {
             val fakeAgent =
                 FakeLlmAgent(
-                    result = GeminiResult.Failure(GeminiNetworkError.Http(statusCode = 500, body = "{}")),
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                GeminiResult.Failure(GeminiNetworkError.Http(statusCode = 500, body = "{}")),
+                            ),
+                        ),
                     tokenCountResults =
                         ArrayDeque(
                             listOf(
@@ -198,185 +340,13 @@ class ContextAgentViewModelTest {
             viewModel.onAction(ContextAgentAction.Submit)
             runCurrent()
 
-            val state = viewModel.uiState.value
-            val lastMessage = state.messages.last()
+            val lastMessage =
+                viewModel.uiState.value.messages
+                    .last()
 
             assertTrue(lastMessage.isError)
             assertTrue(lastMessage.text.contains("Gemma 4 31B returned provider HTTP 500"))
-            assertTrue(lastMessage.text.contains("not context compression"))
-        }
-
-    @Test
-    fun runComparisonProducesFullCompressedAndQualityOutputs() =
-        runTest {
-            val savedMessages =
-                (1..9).flatMap { index ->
-                    listOf(
-                        ContextAgentMessage(role = ContextAgentRole.USER, text = "Question $index"),
-                        ContextAgentMessage(role = ContextAgentRole.MODEL, text = "Answer $index"),
-                    )
-                }
-            val fakeAgent =
-                FakeLlmAgent(
-                    results =
-                        ArrayDeque(
-                            listOf(
-                                completedText("Full answer keeps all facts"),
-                                completedText("Summary of old comparison facts"),
-                                completedText("Compressed answer keeps facts"),
-                                completedText("Quality is similar; compressed saves tokens."),
-                            ),
-                        ),
-                    tokenCountResults =
-                        ArrayDeque(
-                            listOf(
-                                GeminiResult.Success(900),
-                                GeminiResult.Success(300),
-                            ),
-                        ),
-                )
-            val historyStore =
-                FakeContextAgentHistoryStore(
-                    ContextAgentHistorySnapshot(messages = savedMessages),
-                )
-            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
-            runCurrent()
-
-            viewModel.onAction(ContextAgentAction.InputChanged("Compare the next step"))
-            viewModel.onAction(ContextAgentAction.RunComparison)
-            runCurrent()
-
-            assertEquals(4, fakeAgent.calls.size)
-            assertEquals(2, fakeAgent.tokenCountCalls.size)
-            assertTrue(
-                fakeAgent.calls[0]
-                    .messages
-                    .first()
-                    .text == "Question 1",
-            )
-            assertTrue(
-                fakeAgent.calls[0]
-                    .messages
-                    .last()
-                    .text == "Compare the next step",
-            )
-            assertEquals(4_096, fakeAgent.calls[0].generationConfig?.maxOutputTokens)
-            assertEquals(4_096, fakeAgent.calls[2].generationConfig?.maxOutputTokens)
-            assertEquals(2_048, fakeAgent.calls[3].generationConfig?.maxOutputTokens)
-            assertTrue(
-                fakeAgent.calls[2]
-                    .messages
-                    .first()
-                    .text
-                    .contains("Summary of old comparison facts"),
-            )
-            assertTrue(
-                fakeAgent.calls[3]
-                    .messages
-                    .single()
-                    .text
-                    .contains("Full-history answer"),
-            )
-            assertEquals(
-                ContextCompressionStats(
-                    fullPromptTokens = 900,
-                    compressedPromptTokens = 300,
-                    savedPromptTokens = 600,
-                    savedPromptPercent = 66,
-                    summarizedMessageCount = 10,
-                    rawMessageCount = 9,
-                    requestMessageCount = 10,
-                ),
-                viewModel.uiState.value.contextState.latestStats,
-            )
-            assertEquals(
-                ContextQualityComparison(
-                    fullHistoryAnswer = "Full answer keeps all facts",
-                    compressedHistoryAnswer = "Compressed answer keeps facts",
-                    evaluation = "Quality is similar; compressed saves tokens.",
-                ),
-                viewModel.uiState.value.comparison,
-            )
-            val messages = viewModel.uiState.value.messages
-            val answerWithoutCompression = messages[messages.lastIndex - 2]
-            val answerWithCompression = messages[messages.lastIndex - 1]
-            val qualityComparison = messages.last()
-
-            assertEquals(
-                "Compare the next step",
-                messages
-                    .drop(savedMessages.size)
-                    .first()
-                    .text,
-            )
-            assertEquals(
-                "Answer without compression\n\nFull answer keeps all facts",
-                answerWithoutCompression.text,
-            )
-            assertFalse(answerWithoutCompression.includeInContext)
-            assertEquals(
-                "Answer with compression\n\nCompressed answer keeps facts",
-                answerWithCompression.text,
-            )
-            assertTrue(answerWithCompression.includeInContext)
-            assertEquals(
-                "Quality comparison\n\nQuality is similar; compressed saves tokens.",
-                qualityComparison.text,
-            )
-            assertFalse(qualityComparison.includeInContext)
-            assertEquals(viewModel.uiState.value.comparison, historyStore.snapshot.comparison)
-        }
-
-    @Test
-    fun runComparisonUsesLowerOutputBudgetForGemma31() =
-        runTest {
-            val savedMessages =
-                (1..9).flatMap { index ->
-                    listOf(
-                        ContextAgentMessage(role = ContextAgentRole.USER, text = "Question $index"),
-                        ContextAgentMessage(role = ContextAgentRole.MODEL, text = "Answer $index"),
-                    )
-                }
-            val fakeAgent =
-                FakeLlmAgent(
-                    results =
-                        ArrayDeque(
-                            listOf(
-                                completedText("Full answer"),
-                                completedText("Summary"),
-                                completedText("Compressed answer"),
-                                completedText("Quality"),
-                            ),
-                        ),
-                    tokenCountResults =
-                        ArrayDeque(
-                            listOf(
-                                GeminiResult.Success(900),
-                                GeminiResult.Success(300),
-                            ),
-                        ),
-                )
-            val viewModel =
-                createViewModel(
-                    fakeAgent = fakeAgent,
-                    historyStore =
-                        FakeContextAgentHistoryStore(
-                            ContextAgentHistorySnapshot(
-                                messages = savedMessages,
-                                selectedModel = ContextAgentModelOption.GEMMA_4_31B_IT,
-                            ),
-                        ),
-                )
-            runCurrent()
-
-            viewModel.onAction(ContextAgentAction.InputChanged("Compare the next step"))
-            viewModel.onAction(ContextAgentAction.RunComparison)
-            runCurrent()
-
-            assertEquals(1_024, fakeAgent.calls[0].generationConfig?.maxOutputTokens)
-            assertEquals(1_024, fakeAgent.calls[2].generationConfig?.maxOutputTokens)
-            assertEquals(1_024, fakeAgent.calls[3].generationConfig?.maxOutputTokens)
-            assertTrue(fakeAgent.calls.all { it.modelName == ContextAgentModelOption.GEMMA_4_31B_IT.modelName })
+            assertTrue(lastMessage.text.contains("not context management"))
         }
 
     @Test
@@ -402,12 +372,11 @@ class ContextAgentViewModelTest {
     private fun completedText(
         text: String,
         tokenUsage: GeminiTokenUsage? = null,
-    ): CompletableDeferred<AgentResult<String>> = CompletableDeferred(GeminiResult.Success(text, tokenUsage = tokenUsage))
+    ): AgentResult<String> = GeminiResult.Success(text, tokenUsage = tokenUsage)
 
     private class FakeLlmAgent(
-        result: AgentResult<String> = GeminiResult.Success("Answer"),
-        private val results: ArrayDeque<CompletableDeferred<AgentResult<String>>> =
-            ArrayDeque(listOf(CompletableDeferred(result))),
+        private val results: ArrayDeque<AgentResult<String>> =
+            ArrayDeque(listOf(GeminiResult.Success("Answer"))),
         private val tokenCountResults: ArrayDeque<AgentResult<Int>> =
             ArrayDeque(listOf(GeminiResult.Success(100))),
     ) : LlmAgent {
@@ -439,13 +408,11 @@ class ContextAgentViewModelTest {
                     modelName = modelName,
                     totalTokenLimit = totalTokenLimit,
                 )
-            val result =
-                if (results.size > 1) {
-                    results.removeFirst()
-                } else {
-                    results.first()
-                }
-            return result.await()
+            return if (results.size > 1) {
+                results.removeFirst()
+            } else {
+                results.first()
+            }
         }
     }
 

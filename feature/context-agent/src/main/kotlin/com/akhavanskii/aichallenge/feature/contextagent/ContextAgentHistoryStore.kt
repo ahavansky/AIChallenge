@@ -25,8 +25,11 @@ import javax.inject.Singleton
 data class ContextAgentHistorySnapshot(
     val messages: List<ContextAgentMessage> = emptyList(),
     val selectedModel: ContextAgentModelOption = ContextAgentModelOption.GEMINI_3_5_FLASH,
-    val contextState: ContextCompressionState = ContextCompressionState(),
-    val comparison: ContextQualityComparison? = null,
+    val selectedStrategy: ContextManagementStrategy = ContextManagementStrategy.SLIDING_WINDOW,
+    val facts: List<ContextFact> = emptyList(),
+    val branchingState: ContextBranchingState = ContextBranchingState(),
+    val strategyStats: ContextStrategyStats? = null,
+    val comparison: ContextScenarioComparison? = null,
 )
 
 interface ContextAgentHistoryStore {
@@ -91,10 +94,11 @@ class JsonContextAgentHistoryStore internal constructor(
 @Serializable
 private data class StoredContextAgentHistory(
     val selectedModelName: String = ContextAgentModelOption.GEMINI_3_5_FLASH.modelName,
-    val summary: String = "",
-    val summarizedMessageCount: Int = 0,
-    val latestStats: StoredContextCompressionStats? = null,
-    val comparison: StoredContextQualityComparison? = null,
+    val selectedStrategyName: String = ContextManagementStrategy.SLIDING_WINDOW.name,
+    val facts: List<StoredContextFact> = emptyList(),
+    val branchingState: StoredContextBranchingState = StoredContextBranchingState(),
+    val strategyStats: StoredContextStrategyStats? = null,
+    val comparison: StoredContextScenarioComparison? = null,
     val messages: List<StoredContextAgentMessage> = emptyList(),
 ) {
     fun toSnapshot(): ContextAgentHistorySnapshot =
@@ -102,12 +106,12 @@ private data class StoredContextAgentHistory(
             selectedModel =
                 ContextAgentModelOption.entries.firstOrNull { it.modelName == selectedModelName }
                     ?: ContextAgentModelOption.GEMINI_3_5_FLASH,
-            contextState =
-                ContextCompressionState(
-                    summary = summary,
-                    summarizedMessageCount = summarizedMessageCount.coerceAtLeast(0),
-                    latestStats = latestStats?.toStats(),
-                ),
+            selectedStrategy =
+                ContextManagementStrategy.entries.firstOrNull { it.name == selectedStrategyName }
+                    ?: ContextManagementStrategy.SLIDING_WINDOW,
+            facts = facts.map { it.toFact() },
+            branchingState = branchingState.toBranchingState(),
+            strategyStats = strategyStats?.toStats(),
             comparison = comparison?.toComparison(),
             messages = messages.mapNotNull { it.toMessageOrNull() },
         )
@@ -116,11 +120,86 @@ private data class StoredContextAgentHistory(
         fun fromSnapshot(snapshot: ContextAgentHistorySnapshot): StoredContextAgentHistory =
             StoredContextAgentHistory(
                 selectedModelName = snapshot.selectedModel.modelName,
-                summary = snapshot.contextState.summary,
-                summarizedMessageCount = snapshot.contextState.summarizedMessageCount,
-                latestStats = snapshot.contextState.latestStats?.let(StoredContextCompressionStats::fromStats),
-                comparison = snapshot.comparison?.let(StoredContextQualityComparison::fromComparison),
+                selectedStrategyName = snapshot.selectedStrategy.name,
+                facts = snapshot.facts.map(StoredContextFact::fromFact),
+                branchingState = StoredContextBranchingState.fromBranchingState(snapshot.branchingState),
+                strategyStats = snapshot.strategyStats?.let(StoredContextStrategyStats::fromStats),
+                comparison = snapshot.comparison?.let(StoredContextScenarioComparison::fromComparison),
                 messages = snapshot.messages.filterNot { it.isLoading }.map(StoredContextAgentMessage::fromMessage),
+            )
+    }
+}
+
+@Serializable
+private data class StoredContextFact(
+    val key: String,
+    val value: String,
+) {
+    fun toFact(): ContextFact = ContextFact(key = key, value = value)
+
+    companion object {
+        fun fromFact(fact: ContextFact): StoredContextFact = StoredContextFact(key = fact.key, value = fact.value)
+    }
+}
+
+@Serializable
+private data class StoredContextBranchingState(
+    val checkpointMessages: List<StoredContextAgentMessage> = emptyList(),
+    val branches: List<StoredContextAgentBranch> = emptyList(),
+    val activeBranchId: String = ContextBranchId.A.name,
+    val hasCheckpoint: Boolean = false,
+) {
+    fun toBranchingState(): ContextBranchingState {
+        val restoredBranches = branches.mapNotNull { it.toBranchOrNull() }
+        val branchIds = restoredBranches.map { it.id }.toSet()
+        val completeBranches =
+            restoredBranches +
+                ContextBranchId.entries
+                    .filterNot { it in branchIds }
+                    .map { branchId -> ContextAgentBranch(id = branchId) }
+        return ContextBranchingState(
+            checkpointMessages = checkpointMessages.mapNotNull { it.toMessageOrNull() },
+            branches = completeBranches.sortedBy { it.id.ordinal },
+            activeBranchId = ContextBranchId.entries.firstOrNull { it.name == activeBranchId } ?: ContextBranchId.A,
+            hasCheckpoint = hasCheckpoint,
+        )
+    }
+
+    companion object {
+        fun fromBranchingState(state: ContextBranchingState): StoredContextBranchingState =
+            StoredContextBranchingState(
+                checkpointMessages =
+                    state.checkpointMessages
+                        .filterNot { it.isLoading }
+                        .map(StoredContextAgentMessage::fromMessage),
+                branches = state.branches.map(StoredContextAgentBranch::fromBranch),
+                activeBranchId = state.activeBranchId.name,
+                hasCheckpoint = state.hasCheckpoint,
+            )
+    }
+}
+
+@Serializable
+private data class StoredContextAgentBranch(
+    val id: String,
+    val title: String,
+    val messages: List<StoredContextAgentMessage> = emptyList(),
+) {
+    fun toBranchOrNull(): ContextAgentBranch? {
+        val branchId = ContextBranchId.entries.firstOrNull { it.name == id } ?: return null
+        return ContextAgentBranch(
+            id = branchId,
+            title = title.ifBlank { branchId.title },
+            messages = messages.mapNotNull { it.toMessageOrNull() },
+        )
+    }
+
+    companion object {
+        fun fromBranch(branch: ContextAgentBranch): StoredContextAgentBranch =
+            StoredContextAgentBranch(
+                id = branch.id.name,
+                title = branch.title,
+                messages = branch.messages.filterNot { it.isLoading }.map(StoredContextAgentMessage::fromMessage),
             )
     }
 }
@@ -131,7 +210,6 @@ private data class StoredContextAgentMessage(
     val text: String,
     val isError: Boolean = false,
     val tokenUsage: GeminiTokenUsage? = null,
-    val includeInContext: Boolean = true,
 ) {
     fun toMessageOrNull(): ContextAgentMessage? {
         val restoredRole = ContextAgentRole.entries.firstOrNull { it.name == role } ?: return null
@@ -140,7 +218,6 @@ private data class StoredContextAgentMessage(
             text = text,
             isError = isError,
             tokenUsage = tokenUsage,
-            includeInContext = includeInContext,
         )
     }
 
@@ -151,71 +228,115 @@ private data class StoredContextAgentMessage(
                 text = message.text,
                 isError = message.isError,
                 tokenUsage = message.tokenUsage,
-                includeInContext = message.includeInContext,
             )
     }
 }
 
 @Serializable
-private data class StoredContextCompressionStats(
+private data class StoredContextStrategyStats(
+    val strategyName: String,
     val fullPromptTokens: Int? = null,
-    val compressedPromptTokens: Int? = null,
+    val strategyPromptTokens: Int? = null,
     val savedPromptTokens: Int? = null,
     val savedPromptPercent: Int? = null,
-    val summarizedMessageCount: Int = 0,
-    val rawMessageCount: Int = 0,
+    val storedMessageCount: Int = 0,
     val requestMessageCount: Int = 0,
-    val recentMessageLimit: Int = CONTEXT_AGENT_RECENT_MESSAGE_COUNT,
-    val summaryBatchSize: Int = CONTEXT_AGENT_SUMMARY_BATCH_SIZE,
+    val droppedMessageCount: Int = 0,
+    val factsCount: Int = 0,
+    val activeBranchTitle: String? = null,
 ) {
-    fun toStats(): ContextCompressionStats =
-        ContextCompressionStats(
+    fun toStats(): ContextStrategyStats =
+        ContextStrategyStats(
+            strategy =
+                ContextManagementStrategy.entries.firstOrNull { it.name == strategyName }
+                    ?: ContextManagementStrategy.SLIDING_WINDOW,
             fullPromptTokens = fullPromptTokens,
-            compressedPromptTokens = compressedPromptTokens,
+            strategyPromptTokens = strategyPromptTokens,
             savedPromptTokens = savedPromptTokens,
             savedPromptPercent = savedPromptPercent,
-            summarizedMessageCount = summarizedMessageCount,
-            rawMessageCount = rawMessageCount,
+            storedMessageCount = storedMessageCount,
             requestMessageCount = requestMessageCount,
-            recentMessageLimit = recentMessageLimit,
-            summaryBatchSize = summaryBatchSize,
+            droppedMessageCount = droppedMessageCount,
+            factsCount = factsCount,
+            activeBranchTitle = activeBranchTitle,
         )
 
     companion object {
-        fun fromStats(stats: ContextCompressionStats): StoredContextCompressionStats =
-            StoredContextCompressionStats(
+        fun fromStats(stats: ContextStrategyStats): StoredContextStrategyStats =
+            StoredContextStrategyStats(
+                strategyName = stats.strategy.name,
                 fullPromptTokens = stats.fullPromptTokens,
-                compressedPromptTokens = stats.compressedPromptTokens,
+                strategyPromptTokens = stats.strategyPromptTokens,
                 savedPromptTokens = stats.savedPromptTokens,
                 savedPromptPercent = stats.savedPromptPercent,
-                summarizedMessageCount = stats.summarizedMessageCount,
-                rawMessageCount = stats.rawMessageCount,
+                storedMessageCount = stats.storedMessageCount,
                 requestMessageCount = stats.requestMessageCount,
-                recentMessageLimit = stats.recentMessageLimit,
-                summaryBatchSize = stats.summaryBatchSize,
+                droppedMessageCount = stats.droppedMessageCount,
+                factsCount = stats.factsCount,
+                activeBranchTitle = stats.activeBranchTitle,
             )
     }
 }
 
 @Serializable
-private data class StoredContextQualityComparison(
-    val fullHistoryAnswer: String,
-    val compressedHistoryAnswer: String,
-    val evaluation: String,
+private data class StoredContextScenarioComparison(
+    val reports: List<StoredContextScenarioStrategyReport> = emptyList(),
+    val evaluation: String = "",
 ) {
-    fun toComparison(): ContextQualityComparison =
-        ContextQualityComparison(
-            fullHistoryAnswer = fullHistoryAnswer,
-            compressedHistoryAnswer = compressedHistoryAnswer,
+    fun toComparison(): ContextScenarioComparison =
+        ContextScenarioComparison(
+            reports = reports.mapNotNull { it.toReportOrNull() },
             evaluation = evaluation,
         )
 
     companion object {
-        fun fromComparison(comparison: ContextQualityComparison): StoredContextQualityComparison =
-            StoredContextQualityComparison(
-                fullHistoryAnswer = comparison.fullHistoryAnswer,
-                compressedHistoryAnswer = comparison.compressedHistoryAnswer,
+        fun fromComparison(comparison: ContextScenarioComparison): StoredContextScenarioComparison =
+            StoredContextScenarioComparison(
+                reports = comparison.reports.map(StoredContextScenarioStrategyReport::fromReport),
                 evaluation = comparison.evaluation,
+            )
+    }
+}
+
+@Serializable
+private data class StoredContextScenarioStrategyReport(
+    val strategyName: String,
+    val branchTitle: String? = null,
+    val answer: String,
+    val promptTokens: Int? = null,
+    val requestMessageCount: Int = 0,
+    val quality: String,
+    val stability: String,
+    val tokenUse: String,
+    val userConvenience: String,
+) {
+    fun toReportOrNull(): ContextScenarioStrategyReport? {
+        val strategy = ContextManagementStrategy.entries.firstOrNull { it.name == strategyName } ?: return null
+        return ContextScenarioStrategyReport(
+            strategy = strategy,
+            branchTitle = branchTitle,
+            answer = answer,
+            promptTokens = promptTokens,
+            requestMessageCount = requestMessageCount,
+            quality = quality,
+            stability = stability,
+            tokenUse = tokenUse,
+            userConvenience = userConvenience,
+        )
+    }
+
+    companion object {
+        fun fromReport(report: ContextScenarioStrategyReport): StoredContextScenarioStrategyReport =
+            StoredContextScenarioStrategyReport(
+                strategyName = report.strategy.name,
+                branchTitle = report.branchTitle,
+                answer = report.answer,
+                promptTokens = report.promptTokens,
+                requestMessageCount = report.requestMessageCount,
+                quality = report.quality,
+                stability = report.stability,
+                tokenUse = report.tokenUse,
+                userConvenience = report.userConvenience,
             )
     }
 }

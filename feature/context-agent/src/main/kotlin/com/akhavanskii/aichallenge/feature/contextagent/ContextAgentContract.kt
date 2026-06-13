@@ -8,27 +8,59 @@ data class ContextAgentUiState(
     val input: String = "",
     val messages: List<ContextAgentMessage> = emptyList(),
     val selectedModel: ContextAgentModelOption = ContextAgentModelOption.GEMINI_3_5_FLASH,
-    val contextState: ContextCompressionState = ContextCompressionState(),
-    val comparison: ContextQualityComparison? = null,
+    val selectedStrategy: ContextManagementStrategy = ContextManagementStrategy.SLIDING_WINDOW,
+    val facts: List<ContextFact> = emptyList(),
+    val branchingState: ContextBranchingState = ContextBranchingState(),
+    val strategyStats: ContextStrategyStats? = null,
+    val comparison: ContextScenarioComparison? = null,
+    val isScenarioRunning: Boolean = false,
 ) : UiState {
+    val activeMessages: List<ContextAgentMessage>
+        get() =
+            if (selectedStrategy == ContextManagementStrategy.BRANCHING) {
+                branchingState.activeMessages
+            } else {
+                messages
+            }
+
     val isLoading: Boolean
-        get() = messages.any { it.isLoading }
+        get() = isScenarioRunning || activeMessages.any { it.isLoading }
 
     val canSend: Boolean
         get() = input.isNotBlank() && !isLoading
 
     val canClear: Boolean
-        get() = (messages.isNotEmpty() || contextState.summary.isNotBlank() || comparison != null) && !isLoading
+        get() =
+            (
+                messages.isNotEmpty() ||
+                    facts.isNotEmpty() ||
+                    branchingState.hasContent ||
+                    strategyStats != null ||
+                    comparison != null
+            ) &&
+                !isLoading
 
     val canStop: Boolean
         get() = isLoading
 
     val canChangeModel: Boolean
-        get() = messages.none { it.role == ContextAgentRole.USER } && !isLoading
+        get() = !hasAnyUserMessage && !isLoading
+
+    val canChangeStrategy: Boolean
+        get() = !isLoading
+
+    val canSaveCheckpoint: Boolean
+        get() = selectedStrategy == ContextManagementStrategy.BRANCHING && activeMessages.isNotEmpty() && !isLoading
+
+    val canCreateBranches: Boolean
+        get() = selectedStrategy == ContextManagementStrategy.BRANCHING && !isLoading
+
+    val activeBranch: ContextAgentBranch
+        get() = branchingState.activeBranch
 
     val latestTokenUsage: GeminiTokenUsage?
         get() =
-            messages
+            activeMessages
                 .asReversed()
                 .firstOrNull { message ->
                     message.role == ContextAgentRole.MODEL &&
@@ -36,6 +68,12 @@ data class ContextAgentUiState(
                         !message.isError &&
                         message.tokenUsage?.hasAnyCount == true
                 }?.tokenUsage
+
+    private val hasAnyUserMessage: Boolean
+        get() =
+            messages.any { it.role == ContextAgentRole.USER } ||
+                branchingState.checkpointMessages.any { it.role == ContextAgentRole.USER } ||
+                branchingState.branches.any { branch -> branch.messages.any { it.role == ContextAgentRole.USER } }
 }
 
 data class ContextAgentMessage(
@@ -44,7 +82,6 @@ data class ContextAgentMessage(
     val isLoading: Boolean = false,
     val isError: Boolean = false,
     val tokenUsage: GeminiTokenUsage? = null,
-    val includeInContext: Boolean = true,
 )
 
 enum class ContextAgentRole {
@@ -52,28 +89,90 @@ enum class ContextAgentRole {
     MODEL,
 }
 
-data class ContextCompressionState(
-    val summary: String = "",
-    val summarizedMessageCount: Int = 0,
-    val latestStats: ContextCompressionStats? = null,
+enum class ContextManagementStrategy(
+    val title: String,
+    val shortTitle: String,
+    val description: String,
+) {
+    SLIDING_WINDOW(
+        title = "Sliding Window",
+        shortTitle = "Window",
+        description = "Stores and sends only the latest messages.",
+    ),
+    STICKY_FACTS(
+        title = "Sticky Facts",
+        shortTitle = "Facts",
+        description = "Keeps key-value facts plus the latest messages.",
+    ),
+    BRANCHING(
+        title = "Branching",
+        shortTitle = "Branches",
+        description = "Keeps a checkpoint and two independent branches.",
+    ),
+}
+
+data class ContextFact(
+    val key: String,
+    val value: String,
 )
 
-data class ContextCompressionStats(
+data class ContextBranchingState(
+    val checkpointMessages: List<ContextAgentMessage> = emptyList(),
+    val branches: List<ContextAgentBranch> = defaultContextBranches(),
+    val activeBranchId: ContextBranchId = ContextBranchId.A,
+    val hasCheckpoint: Boolean = false,
+) {
+    val activeBranch: ContextAgentBranch
+        get() = branches.firstOrNull { it.id == activeBranchId } ?: defaultContextBranches().first()
+
+    val activeMessages: List<ContextAgentMessage>
+        get() = checkpointMessages + activeBranch.messages
+
+    val hasContent: Boolean
+        get() = checkpointMessages.isNotEmpty() || branches.any { it.messages.isNotEmpty() }
+}
+
+data class ContextAgentBranch(
+    val id: ContextBranchId,
+    val title: String = id.title,
+    val messages: List<ContextAgentMessage> = emptyList(),
+)
+
+enum class ContextBranchId(
+    val title: String,
+) {
+    A("Branch A"),
+    B("Branch B"),
+}
+
+data class ContextStrategyStats(
+    val strategy: ContextManagementStrategy,
     val fullPromptTokens: Int? = null,
-    val compressedPromptTokens: Int? = null,
+    val strategyPromptTokens: Int? = null,
     val savedPromptTokens: Int? = null,
     val savedPromptPercent: Int? = null,
-    val summarizedMessageCount: Int = 0,
-    val rawMessageCount: Int = 0,
+    val storedMessageCount: Int = 0,
     val requestMessageCount: Int = 0,
-    val recentMessageLimit: Int = CONTEXT_AGENT_RECENT_MESSAGE_COUNT,
-    val summaryBatchSize: Int = CONTEXT_AGENT_SUMMARY_BATCH_SIZE,
+    val droppedMessageCount: Int = 0,
+    val factsCount: Int = 0,
+    val activeBranchTitle: String? = null,
 )
 
-data class ContextQualityComparison(
-    val fullHistoryAnswer: String,
-    val compressedHistoryAnswer: String,
+data class ContextScenarioComparison(
+    val reports: List<ContextScenarioStrategyReport>,
     val evaluation: String,
+)
+
+data class ContextScenarioStrategyReport(
+    val strategy: ContextManagementStrategy,
+    val branchTitle: String? = null,
+    val answer: String,
+    val promptTokens: Int? = null,
+    val requestMessageCount: Int = 0,
+    val quality: String,
+    val stability: String,
+    val tokenUse: String,
+    val userConvenience: String,
 )
 
 enum class ContextAgentModelOption(
@@ -86,7 +185,7 @@ enum class ContextAgentModelOption(
     GEMINI_3_5_FLASH(
         modelName = "gemini-3.5-flash",
         title = "Gemini 3.5 Flash",
-        description = "Default Gemini model for compressed chat.",
+        description = "Default Gemini model for context strategy testing.",
         inputTokenLimit = GEMINI_FLASH_INPUT_TOKEN_LIMIT,
         outputTokenLimit = GEMINI_FLASH_OUTPUT_TOKEN_LIMIT,
     ),
@@ -133,9 +232,21 @@ sealed interface ContextAgentAction : UiEvent {
         val model: ContextAgentModelOption,
     ) : ContextAgentAction
 
+    data class StrategyChanged(
+        val strategy: ContextManagementStrategy,
+    ) : ContextAgentAction
+
+    data class BranchChanged(
+        val branchId: ContextBranchId,
+    ) : ContextAgentAction
+
     data object Submit : ContextAgentAction
 
-    data object RunComparison : ContextAgentAction
+    data object RunScenarioComparison : ContextAgentAction
+
+    data object SaveCheckpoint : ContextAgentAction
+
+    data object CreateBranches : ContextAgentAction
 
     data object Clear : ContextAgentAction
 
@@ -143,9 +254,12 @@ sealed interface ContextAgentAction : UiEvent {
 }
 
 const val CONTEXT_AGENT_RECENT_MESSAGE_COUNT = 8
-const val CONTEXT_AGENT_SUMMARY_BATCH_SIZE = 10
+const val CONTEXT_AGENT_MAX_FACTS = 12
 
 private const val GEMINI_FLASH_INPUT_TOKEN_LIMIT = 1_048_576
 private const val GEMINI_FLASH_OUTPUT_TOKEN_LIMIT = 65_536
 private const val GEMMA_4_CONTEXT_TOKEN_LIMIT = 262_144
 private const val GEMMA_4_OUTPUT_TOKEN_LIMIT = 128_000
+
+private fun defaultContextBranches(): List<ContextAgentBranch> =
+    ContextBranchId.entries.map { branchId -> ContextAgentBranch(id = branchId) }
