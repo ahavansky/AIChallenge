@@ -8,6 +8,8 @@ data class AgentChatUiState(
     val input: String = "",
     val messages: List<AgentChatMessage> = emptyList(),
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
+    val taskContextInput: String = AgentChatTaskContext().toEditableText(),
+    val isLongTermMemoryDirty: Boolean = false,
     val selectedAgent: AgentChatAgentOption = AgentChatAgentOption.GEMINI_3_5_FLASH,
     val customTotalTokenLimit: Int? = null,
 ) : UiState {
@@ -48,6 +50,12 @@ data class AgentChatUiState(
 
     val canStop: Boolean
         get() = isLoading
+
+    val canSaveLongTermMemory: Boolean
+        get() = isLongTermMemoryDirty && !isLoading
+
+    val canClearTaskContext: Boolean
+        get() = memory.taskContext.itemCount > 0 && !isLoading
 }
 
 data class AgentChatMessage(
@@ -137,6 +145,14 @@ sealed interface AgentChatAction : UiEvent {
         val input: String,
     ) : AgentChatAction
 
+    data class TaskContextChanged(
+        val input: String,
+    ) : AgentChatAction
+
+    data class LongTermMemoryChanged(
+        val markdown: String,
+    ) : AgentChatAction
+
     data class ScenarioSelected(
         val scenario: AgentChatScenario,
     ) : AgentChatAction
@@ -144,6 +160,10 @@ sealed interface AgentChatAction : UiEvent {
     data object Submit : AgentChatAction
 
     data object ClearChat : AgentChatAction
+
+    data object ClearTaskContext : AgentChatAction
+
+    data object SaveLongTermMemory : AgentChatAction
 
     data object Stop : AgentChatAction
 }

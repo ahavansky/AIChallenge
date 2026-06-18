@@ -2,198 +2,175 @@ package com.akhavanskii.aichallenge.feature.agentchat
 
 import com.akhavanskii.aichallenge.core.network.AgentMessage
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import java.util.Locale
+
+const val DEFAULT_LONG_TERM_MEMORY_FILE_NAME = "agent_chat_memory.md"
+
+val DEFAULT_LONG_TERM_MEMORY_MARKDOWN: String =
+    """
+    # User Profile
+
+    # Preferences
+
+    # Project Decisions
+
+    # Reusable Knowledge
+
+    # Invariants
+    """.trimIndent()
 
 @Serializable
 data class AgentChatMemorySnapshot(
-    val shortTerm: AgentChatShortTermMemory = AgentChatShortTermMemory(),
-    val working: AgentChatWorkingMemory = AgentChatWorkingMemory(),
-    val longTerm: AgentChatLongTermMemory = AgentChatLongTermMemory(),
+    val taskContext: AgentChatTaskContext = AgentChatTaskContext(),
+    @Transient val longTermMarkdown: AgentChatLongTermMarkdown = AgentChatLongTermMarkdown(),
     val lastRequest: AgentChatMemoryRequestContext? = null,
 ) {
-    fun recordUserInput(input: String): AgentChatMemorySnapshot =
-        copy(
-            working = working.recordUserInput(input),
-            longTerm = longTerm.recordUserInput(input),
-        )
+    fun withTaskContext(taskContext: AgentChatTaskContext): AgentChatMemorySnapshot = copy(taskContext = taskContext, lastRequest = null)
 
-    fun withShortTermFromMessages(messages: List<AgentChatMessage>): AgentChatMemorySnapshot =
-        copy(shortTerm = messages.toShortTermMemory())
+    fun withLongTermMarkdown(longTermMarkdown: AgentChatLongTermMarkdown): AgentChatMemorySnapshot =
+        copy(longTermMarkdown = longTermMarkdown, lastRequest = null)
 
     fun withLastRequest(context: AgentChatMemoryRequestContext): AgentChatMemorySnapshot = copy(lastRequest = context)
 
-    fun clearTaskMemory(): AgentChatMemorySnapshot =
+    fun clearTaskContext(): AgentChatMemorySnapshot =
         copy(
-            shortTerm = AgentChatShortTermMemory(),
-            working = AgentChatWorkingMemory(),
+            taskContext = AgentChatTaskContext(),
             lastRequest = null,
         )
 }
 
 @Serializable
-data class AgentChatShortTermMemory(
-    val entries: List<AgentChatMemoryEntry> = emptyList(),
-) {
-    val messageCount: Int
-        get() = entries.size
-
-    fun toAgentMessages(): List<AgentMessage> =
-        entries.map { entry ->
-            when (entry.role) {
-                AgentChatMemoryRole.USER -> AgentMessage.User(entry.text)
-                AgentChatMemoryRole.MODEL -> AgentMessage.Model(entry.text)
-            }
-        }
-}
-
-@Serializable
-data class AgentChatMemoryEntry(
-    val role: AgentChatMemoryRole,
-    val text: String,
-)
-
-@Serializable
-enum class AgentChatMemoryRole {
-    USER,
-    MODEL,
-}
-
-@Serializable
-data class AgentChatWorkingMemory(
-    val goal: String? = null,
-    val stage: String? = null,
+data class AgentChatTaskContext(
+    val goal: String = "",
+    val stage: String = "",
     val approvedPlan: List<String> = emptyList(),
     val constraints: List<String> = emptyList(),
+    val openQuestions: List<String> = emptyList(),
     val intermediateResults: List<String> = emptyList(),
 ) {
     val itemCount: Int
         get() =
-            listOfNotNull(goal, stage).size +
+            listOf(goal, stage).count { it.isNotBlank() } +
                 approvedPlan.size +
                 constraints.size +
+                openQuestions.size +
                 intermediateResults.size
 
-    fun toPromptBlockOrNull(): String? {
+    fun toPromptBlockOrNull(maxChars: Int): String? {
         if (itemCount == 0) return null
         return buildString {
-            appendLine("Working memory for the current task. Use it only for this active task.")
-            goal?.let { appendLine("- Goal: $it") }
-            stage?.let { appendLine("- Stage: $it") }
+            appendLine("TaskContext for the current task. Prefer this over older chat history when it conflicts.")
+            appendMemoryLine("Goal", goal)
+            appendMemoryLine("Stage", stage)
             appendLines("Approved plan", approvedPlan)
-            appendLines("Task constraints", constraints)
-            appendLines("Intermediate results", intermediateResults)
-        }.trim()
+            appendLines("Task constraint", constraints)
+            appendLines("Open question", openQuestions)
+            appendLines("Intermediate result", intermediateResults)
+        }.trim().takePromptChars(maxChars)
     }
 
-    fun recordUserInput(input: String): AgentChatWorkingMemory {
-        var updated = this
-        input.memoryStatements().forEach { statement ->
-            updated =
-                when (statement.key) {
-                    "goal", "цель", "task", "задача" -> updated.copy(goal = statement.value)
-                    "stage", "этап", "state", "стадия" -> updated.copy(stage = statement.value)
-                    "plan", "план", "approved_plan", "утвержденный_план" ->
-                        updated.copy(approvedPlan = updated.approvedPlan.appendUnique(statement.value))
-                    "constraint", "constraints", "ограничение", "ограничения" ->
-                        updated.copy(constraints = updated.constraints.appendUnique(statement.value))
-                    "result", "результат", "intermediate_result", "промежуточный_результат" ->
-                        updated.copy(intermediateResults = updated.intermediateResults.appendUnique(statement.value))
-                    else -> updated
+    fun toEditableText(): String =
+        buildString {
+            appendLine("Goal: $goal")
+            appendLine("Stage: $stage")
+            approvedPlan.ifEmpty { listOf("") }.forEach { appendLine("Plan: $it") }
+            constraints.ifEmpty { listOf("") }.forEach { appendLine("Constraint: $it") }
+            openQuestions.ifEmpty { listOf("") }.forEach { appendLine("Open question: $it") }
+            intermediateResults.ifEmpty { listOf("") }.forEach { appendLine("Result: $it") }
+        }.trimEnd()
+
+    companion object {
+        fun fromEditableText(text: String): AgentChatTaskContext {
+            var goal = ""
+            var stage = ""
+            var approvedPlan = emptyList<String>()
+            var constraints = emptyList<String>()
+            var openQuestions = emptyList<String>()
+            var intermediateResults = emptyList<String>()
+
+            text
+                .lineSequence()
+                .mapNotNull { line -> line.toMemoryStatementOrNull() }
+                .forEach { statement ->
+                    when (statement.key) {
+                        "goal", "цель", "task", "задача" -> goal = statement.value
+                        "stage", "этап", "state", "стадия" -> stage = statement.value
+                        "plan", "план", "approved_plan", "утвержденный_план" ->
+                            approvedPlan = approvedPlan.appendUnique(statement.value)
+                        "constraint", "constraints", "ограничение", "ограничения" ->
+                            constraints = constraints.appendUnique(statement.value)
+                        "open_question", "question", "вопрос", "открытый_вопрос" ->
+                            openQuestions = openQuestions.appendUnique(statement.value)
+                        "result", "результат", "intermediate_result", "промежуточный_результат" ->
+                            intermediateResults = intermediateResults.appendUnique(statement.value)
+                    }
                 }
+
+            return AgentChatTaskContext(
+                goal = goal,
+                stage = stage,
+                approvedPlan = approvedPlan,
+                constraints = constraints,
+                openQuestions = openQuestions,
+                intermediateResults = intermediateResults,
+            )
         }
-        input.memorySentences().forEach { sentence ->
-            val lower = sentence.lowercase(Locale.ROOT)
-            updated =
-                when {
-                    updated.goal == null && lower.containsAny("цель", "goal", "задача", "task") ->
-                        updated.copy(goal = sentence)
-                    lower.containsAny("огранич", "constraint", "must not", "нельзя") ->
-                        updated.copy(constraints = updated.constraints.appendUnique(sentence))
-                    lower.containsAny("результат", "result", "готово", "done") ->
-                        updated.copy(intermediateResults = updated.intermediateResults.appendUnique(sentence))
-                    else -> updated
-                }
-        }
-        return updated
     }
 }
 
 @Serializable
-data class AgentChatLongTermMemory(
-    val profile: List<String> = emptyList(),
-    val preferences: List<String> = emptyList(),
-    val decisions: List<String> = emptyList(),
-    val knowledge: List<String> = emptyList(),
-    val invariants: List<String> = emptyList(),
+data class AgentChatLongTermMarkdown(
+    val fileName: String = DEFAULT_LONG_TERM_MEMORY_FILE_NAME,
+    val markdown: String = DEFAULT_LONG_TERM_MEMORY_MARKDOWN,
 ) {
-    val itemCount: Int
-        get() = profile.size + preferences.size + decisions.size + knowledge.size + invariants.size
+    val meaningfulMarkdown: String
+        get() = markdown.trim()
 
-    fun toPromptBlockOrNull(): String? {
-        if (itemCount == 0) return null
+    val meaningfulCharCount: Int
+        get() = if (hasMeaningfulContent) meaningfulMarkdown.length else 0
+
+    val hasMeaningfulContent: Boolean
+        get() =
+            markdown
+                .lineSequence()
+                .map { it.trim() }
+                .any { line -> line.isNotBlank() && !line.startsWith("#") }
+
+    fun toPromptBlockOrNull(maxChars: Int): String? {
+        if (!hasMeaningfulContent) return null
         return buildString {
-            appendLine("Long-term memory. Treat these as durable profile, decisions, knowledge, and invariants.")
-            appendLines("Profile", profile)
-            appendLines("Preferences", preferences)
-            appendLines("Decisions", decisions)
-            appendLines("Knowledge", knowledge)
-            appendLines("Invariants", invariants)
+            appendLine("Long-term memory from user-editable $fileName.")
+            appendLine("Use it as durable profile, preferences, decisions, reusable knowledge, and invariants.")
+            appendLine(meaningfulMarkdown)
         }.trim()
-    }
-
-    fun recordUserInput(input: String): AgentChatLongTermMemory {
-        var updated = this
-        input.memoryStatements().forEach { statement ->
-            updated =
-                when (statement.key) {
-                    "profile", "профиль" -> updated.copy(profile = updated.profile.appendUnique(statement.value))
-                    "preference", "preferences", "предпочтение", "предпочтения" ->
-                        updated.copy(preferences = updated.preferences.appendUnique(statement.value))
-                    "decision", "decisions", "решение", "решения", "договоренность" ->
-                        updated.copy(decisions = updated.decisions.appendUnique(statement.value))
-                    "knowledge", "знание", "знания" ->
-                        updated.copy(knowledge = updated.knowledge.appendUnique(statement.value))
-                    "invariant", "invariants", "инвариант", "инварианты" ->
-                        updated.copy(invariants = updated.invariants.appendUnique(statement.value))
-                    else -> updated
-                }
-        }
-        input.memorySentences().forEach { sentence ->
-            val lower = sentence.lowercase(Locale.ROOT)
-            updated =
-                when {
-                    lower.containsAny("профиль", "profile") ->
-                        updated.copy(profile = updated.profile.appendUnique(sentence))
-                    lower.containsAny("предпоч", "preference", "важно", "хочу") ->
-                        updated.copy(preferences = updated.preferences.appendUnique(sentence))
-                    lower.containsAny("решили", "решение", "договор", "decision") ->
-                        updated.copy(decisions = updated.decisions.appendUnique(sentence))
-                    lower.containsAny("знание", "knowledge", "запомни") ->
-                        updated.copy(knowledge = updated.knowledge.appendUnique(sentence))
-                    lower.containsAny("инвариант", "always", "всегда", "никогда") ->
-                        updated.copy(invariants = updated.invariants.appendUnique(sentence))
-                    else -> updated
-                }
-        }
-        return updated
+            .takePromptChars(maxChars)
     }
 }
 
 @Serializable
 data class AgentChatMemorySelection(
-    val includeShortTerm: Boolean = true,
-    val includeWorking: Boolean = true,
-    val includeLongTerm: Boolean = true,
+    val includeChatHistory: Boolean = true,
+    val includeTaskContext: Boolean = true,
+    val includeLongTermMarkdown: Boolean = true,
+)
+
+@Serializable
+data class AgentChatMemoryBudget(
+    val chatHistoryMaxMessages: Int = DEFAULT_CHAT_HISTORY_MAX_MESSAGES,
+    val taskContextMaxChars: Int = DEFAULT_TASK_CONTEXT_MAX_CHARS,
+    val longTermMarkdownMaxChars: Int = DEFAULT_LONG_TERM_MARKDOWN_MAX_CHARS,
 )
 
 @Serializable
 data class AgentChatMemoryRequestContext(
     val selection: AgentChatMemorySelection = AgentChatMemorySelection(),
+    val budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
     val includedLayers: List<AgentChatMemoryLayer> = emptyList(),
-    val shortTermMessageCount: Int = 0,
-    val workingItemCount: Int = 0,
-    val longTermItemCount: Int = 0,
-    val promptPreview: String = "",
+    val chatHistoryMessageCount: Int = 0,
+    val taskContextItemCount: Int = 0,
+    val longTermMarkdownChars: Int = 0,
+    @Transient val promptPreview: String = "",
 )
 
 @Serializable
@@ -201,8 +178,8 @@ enum class AgentChatMemoryLayer(
     val title: String,
 ) {
     SHORT_TERM("Short-term"),
-    WORKING("Working"),
-    LONG_TERM("Long-term"),
+    TASK_CONTEXT("TaskContext"),
+    LONG_TERM_MARKDOWN("Long-term markdown"),
 }
 
 data class AgentChatPreparedPrompt(
@@ -213,32 +190,39 @@ data class AgentChatPreparedPrompt(
 object AgentChatMemoryPromptBuilder {
     fun build(
         latestUserMessage: String,
+        chatMessages: List<AgentChatMessage>,
         memory: AgentChatMemorySnapshot,
         selection: AgentChatMemorySelection = AgentChatMemorySelection(),
+        budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
     ): AgentChatPreparedPrompt {
         val messages = mutableListOf<AgentMessage>()
         val includedLayers = mutableListOf<AgentChatMemoryLayer>()
 
-        if (selection.includeLongTerm) {
-            memory.longTerm.toPromptBlockOrNull()?.let { promptBlock ->
+        var longTermMarkdownChars = 0
+        if (selection.includeLongTermMarkdown) {
+            memory.longTermMarkdown.toPromptBlockOrNull(budget.longTermMarkdownMaxChars)?.let { promptBlock ->
                 messages += AgentMessage.User(promptBlock)
-                includedLayers += AgentChatMemoryLayer.LONG_TERM
+                includedLayers += AgentChatMemoryLayer.LONG_TERM_MARKDOWN
+                longTermMarkdownChars = promptBlock.length
             }
         }
 
-        if (selection.includeWorking) {
-            memory.working.toPromptBlockOrNull()?.let { promptBlock ->
+        if (selection.includeTaskContext) {
+            memory.taskContext.toPromptBlockOrNull(budget.taskContextMaxChars)?.let { promptBlock ->
                 messages += AgentMessage.User(promptBlock)
-                includedLayers += AgentChatMemoryLayer.WORKING
+                includedLayers += AgentChatMemoryLayer.TASK_CONTEXT
             }
         }
 
-        if (selection.includeShortTerm) {
-            val shortTermMessages = memory.shortTerm.toAgentMessages()
-            if (shortTermMessages.isNotEmpty()) {
-                includedLayers += AgentChatMemoryLayer.SHORT_TERM
-                messages += shortTermMessages
+        val shortTermMessages =
+            if (selection.includeChatHistory) {
+                chatMessages.toShortTermPromptMessages(budget.chatHistoryMaxMessages)
+            } else {
+                emptyList()
             }
+        if (shortTermMessages.isNotEmpty()) {
+            includedLayers += AgentChatMemoryLayer.SHORT_TERM
+            messages += shortTermMessages
         }
 
         messages += AgentMessage.User(latestUserMessage)
@@ -248,18 +232,19 @@ object AgentChatMemoryPromptBuilder {
             requestContext =
                 AgentChatMemoryRequestContext(
                     selection = selection,
+                    budget = budget,
                     includedLayers = includedLayers,
-                    shortTermMessageCount = if (selection.includeShortTerm) memory.shortTerm.messageCount else 0,
-                    workingItemCount = if (selection.includeWorking) memory.working.itemCount else 0,
-                    longTermItemCount = if (selection.includeLongTerm) memory.longTerm.itemCount else 0,
+                    chatHistoryMessageCount = shortTermMessages.size,
+                    taskContextItemCount = if (selection.includeTaskContext) memory.taskContext.itemCount else 0,
+                    longTermMarkdownChars = longTermMarkdownChars,
                     promptPreview = messages.toPromptPreview(),
                 ),
         )
     }
 }
 
-fun List<AgentChatMessage>.toShortTermMemory(): AgentChatShortTermMemory {
-    val entries = mutableListOf<AgentChatMemoryEntry>()
+fun List<AgentChatMessage>.toShortTermPromptMessages(maxMessages: Int = DEFAULT_CHAT_HISTORY_MAX_MESSAGES): List<AgentMessage> {
+    val agentMessages = mutableListOf<AgentMessage>()
     var pendingUserMessage: AgentChatMessage? = null
 
     for (message in this) {
@@ -272,56 +257,46 @@ fun List<AgentChatMessage>.toShortTermMemory(): AgentChatShortTermMemory {
             AgentChatRole.USER -> pendingUserMessage = message
             AgentChatRole.MODEL -> {
                 val userMessage = pendingUserMessage ?: continue
-                entries += AgentChatMemoryEntry(role = AgentChatMemoryRole.USER, text = userMessage.text)
-                entries += AgentChatMemoryEntry(role = AgentChatMemoryRole.MODEL, text = message.text)
+                agentMessages += AgentMessage.User(userMessage.text)
+                agentMessages += AgentMessage.Model(message.text)
                 pendingUserMessage = null
             }
         }
     }
 
-    return AgentChatShortTermMemory(entries = entries.takeLast(MAX_SHORT_TERM_MESSAGES))
+    return agentMessages.takeLast(maxMessages.coerceAtLeast(0))
 }
 
-fun AgentChatMemorySnapshot.formatDebugSummary(): String =
+fun AgentChatMemorySnapshot.formatDebugDetails(
+    chatMessages: List<AgentChatMessage>,
+    budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
+): String =
     buildString {
-        append("Short-term: ${shortTerm.messageCount} messages")
-        append(" | Working: ${working.itemCount} items")
-        append(" | Long-term: ${longTerm.itemCount} items")
-        lastRequest?.let { request ->
-            val layers =
-                request.includedLayers
-                    .joinToString(separator = ", ") { it.title }
-                    .ifBlank { "latest user message only" }
-            append("\nPrompt context: $layers")
-            append(
-                " | counts ${request.shortTermMessageCount}/" +
-                    "${request.workingItemCount}/${request.longTermItemCount}",
-            )
-        }
-    }
+        val shortTermMessages = chatMessages.toShortTermPromptMessages(budget.chatHistoryMaxMessages)
+        appendLayerHeader("Short-term", shortTermMessages.size, "messages")
+        appendLine("- Source: chat history DB")
+        appendAgentMessages(shortTermMessages)
 
-fun AgentChatMemorySnapshot.formatDebugDetails(): String =
-    buildString {
-        appendLayerHeader("Short-term", shortTerm.messageCount, "messages")
-        appendMemoryEntries(shortTerm.entries)
-        appendLayerHeader("Working", working.itemCount, "items")
-        if (working.itemCount == 0) {
+        appendLayerHeader("Working", taskContext.itemCount, "items")
+        appendLine("- Source: TaskContext")
+        if (taskContext.itemCount == 0) {
             appendLine("- Empty")
         }
-        appendMemoryLine("Goal", working.goal)
-        appendMemoryLine("Stage", working.stage)
-        appendMemoryLines("Plan", working.approvedPlan)
-        appendMemoryLines("Constraint", working.constraints)
-        appendMemoryLines("Result", working.intermediateResults)
-        appendLayerHeader("Long-term", longTerm.itemCount, "items")
-        if (longTerm.itemCount == 0) {
+        appendMemoryLine("Goal", taskContext.goal)
+        appendMemoryLine("Stage", taskContext.stage)
+        appendMemoryLines("Plan", taskContext.approvedPlan)
+        appendMemoryLines("Constraint", taskContext.constraints)
+        appendMemoryLines("Open question", taskContext.openQuestions)
+        appendMemoryLines("Result", taskContext.intermediateResults)
+
+        appendLayerHeader("Long-term", longTermMarkdown.meaningfulCharCount, "chars")
+        appendLine("- Source: ${longTermMarkdown.fileName}")
+        if (longTermMarkdown.hasMeaningfulContent) {
+            appendMemoryLine("Markdown", longTermMarkdown.meaningfulMarkdown)
+        } else {
             appendLine("- Empty")
         }
-        appendMemoryLines("Profile", longTerm.profile)
-        appendMemoryLines("Preference", longTerm.preferences)
-        appendMemoryLines("Decision", longTerm.decisions)
-        appendMemoryLines("Knowledge", longTerm.knowledge)
-        appendMemoryLines("Invariant", longTerm.invariants)
+
         lastRequest?.let { request ->
             val layers =
                 request.includedLayers
@@ -329,8 +304,8 @@ fun AgentChatMemorySnapshot.formatDebugDetails(): String =
                     .ifBlank { "latest user message only" }
             appendLine("Prompt context: $layers")
             append(
-                "Counts: short=${request.shortTermMessageCount}, " +
-                    "working=${request.workingItemCount}, long=${request.longTermItemCount}",
+                "Counts: short=${request.chatHistoryMessageCount}, " +
+                    "task=${request.taskContextItemCount}, longChars=${request.longTermMarkdownChars}",
             )
         }
     }.trim()
@@ -348,27 +323,27 @@ private fun StringBuilder.appendLayerHeader(
     appendLine("$title ($count $unit)")
 }
 
-private fun StringBuilder.appendMemoryEntries(entries: List<AgentChatMemoryEntry>) {
-    if (entries.isEmpty()) {
+private fun StringBuilder.appendAgentMessages(messages: List<AgentMessage>) {
+    if (messages.isEmpty()) {
         appendLine("- Empty")
         return
     }
-    entries.take(DEBUG_LAYER_ITEM_LIMIT).forEach { entry ->
+    messages.take(DEBUG_LAYER_ITEM_LIMIT).forEach { message ->
         val role =
-            when (entry.role) {
-                AgentChatMemoryRole.USER -> "User"
-                AgentChatMemoryRole.MODEL -> "Model"
+            when (message) {
+                is AgentMessage.User -> "User"
+                is AgentMessage.Model -> "Model"
             }
-        appendLine("- $role: ${entry.text.compactDebugValue()}")
+        appendLine("- $role: ${message.text.compactDebugValue()}")
     }
-    appendOverflowCount(entries.size)
+    appendOverflowCount(messages.size)
 }
 
 private fun StringBuilder.appendMemoryLine(
     label: String,
-    value: String?,
+    value: String,
 ) {
-    if (!value.isNullOrBlank()) {
+    if (value.isNotBlank()) {
         appendLine("- $label: ${value.compactDebugValue()}")
     }
 }
@@ -390,27 +365,21 @@ private fun StringBuilder.appendOverflowCount(size: Int) {
     }
 }
 
-private fun String.memoryStatements(): List<MemoryStatement> =
-    lineSequence()
-        .mapNotNull { line ->
-            val separatorIndex = line.indexOfFirst { it == ':' || it == '=' }
-            if (separatorIndex !in 1..40) return@mapNotNull null
-            val key = line.take(separatorIndex).normalizedMemoryKey()
-            val value = line.drop(separatorIndex + 1).cleanMemoryValue()
-            value.takeIf { it.isNotBlank() }?.let { MemoryStatement(key = key, value = it) }
-        }.toList()
+private fun StringBuilder.appendLines(
+    title: String,
+    values: List<String>,
+) {
+    values.forEach { value ->
+        appendLine("- $title: $value")
+    }
+}
 
-private fun String.memorySentences(): List<String> =
-    lineSequence()
-        .filterNot { it.hasMemoryStatementPrefix() }
-        .flatMap { line -> line.split('.', ';') }
-        .map { it.cleanMemoryValue() }
-        .filter { it.length >= MIN_MEMORY_SENTENCE_LENGTH }
-        .toList()
-
-private fun String.hasMemoryStatementPrefix(): Boolean {
+private fun String.toMemoryStatementOrNull(): MemoryStatement? {
     val separatorIndex = indexOfFirst { it == ':' || it == '=' }
-    return separatorIndex in 1..40
+    if (separatorIndex !in 1..40) return null
+    val key = take(separatorIndex).normalizedMemoryKey()
+    val value = drop(separatorIndex + 1).cleanMemoryValue()
+    return value.takeIf { it.isNotBlank() }?.let { MemoryStatement(key = key, value = it) }
 }
 
 private fun String.normalizedMemoryKey(): String =
@@ -427,15 +396,6 @@ private fun List<String>.appendUnique(value: String): List<String> {
     return (this + cleaned).takeLast(MAX_MEMORY_ITEMS)
 }
 
-private fun StringBuilder.appendLines(
-    title: String,
-    values: List<String>,
-) {
-    values.forEach { value ->
-        appendLine("- $title: $value")
-    }
-}
-
 private fun List<AgentMessage>.toPromptPreview(): String =
     joinToString(separator = "\n\n") { message ->
         val role =
@@ -446,12 +406,13 @@ private fun List<AgentMessage>.toPromptPreview(): String =
         "[$role]\n${message.text}"
     }.take(MAX_PROMPT_PREVIEW_LENGTH)
 
-private fun String.containsAny(vararg needles: String): Boolean = needles.any { needle -> contains(needle) }
+private fun String.takePromptChars(maxChars: Int): String = take(maxChars.coerceAtLeast(0))
 
-private const val MAX_SHORT_TERM_MESSAGES = 12
+private const val DEFAULT_CHAT_HISTORY_MAX_MESSAGES = 12
+private const val DEFAULT_TASK_CONTEXT_MAX_CHARS = 1_200
+private const val DEFAULT_LONG_TERM_MARKDOWN_MAX_CHARS = 2_000
 private const val MAX_MEMORY_ITEMS = 12
 private const val MAX_MEMORY_VALUE_LENGTH = 220
-private const val MIN_MEMORY_SENTENCE_LENGTH = 8
 private const val MAX_PROMPT_PREVIEW_LENGTH = 1_200
 private const val MAX_DEBUG_VALUE_LENGTH = 96
 private const val DEBUG_LAYER_ITEM_LIMIT = 4

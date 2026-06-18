@@ -35,6 +35,12 @@ interface AgentChatHistoryStore {
     suspend fun save(snapshot: AgentChatHistorySnapshot)
 }
 
+interface AgentChatLongTermMemoryStore {
+    suspend fun load(): AgentChatLongTermMarkdown
+
+    suspend fun save(memory: AgentChatLongTermMarkdown)
+}
+
 class JsonAgentChatHistoryStore internal constructor(
     private val historyFile: File,
     private val json: Json,
@@ -88,6 +94,51 @@ class JsonAgentChatHistoryStore internal constructor(
     }
 }
 
+class MarkdownAgentChatLongTermMemoryStore internal constructor(
+    private val memoryFile: File,
+    private val dispatcher: CoroutineDispatcher,
+) : AgentChatLongTermMemoryStore {
+    private val mutex = Mutex()
+
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        @AgentChatStorageDispatcher dispatcher: CoroutineDispatcher,
+    ) : this(
+        memoryFile = File(context.filesDir, DEFAULT_LONG_TERM_MEMORY_FILE_NAME),
+        dispatcher = dispatcher,
+    )
+
+    override suspend fun load(): AgentChatLongTermMarkdown =
+        withContext(dispatcher) {
+            mutex.withLock {
+                val markdown =
+                    if (memoryFile.exists()) {
+                        runCatching { memoryFile.readText() }.getOrDefault(DEFAULT_LONG_TERM_MEMORY_MARKDOWN)
+                    } else {
+                        DEFAULT_LONG_TERM_MEMORY_MARKDOWN
+                    }
+                AgentChatLongTermMarkdown(fileName = memoryFile.name, markdown = markdown)
+            }
+        }
+
+    override suspend fun save(memory: AgentChatLongTermMarkdown) {
+        withContext(dispatcher) {
+            mutex.withLock {
+                val parent = memoryFile.parentFile
+                parent?.mkdirs()
+
+                val tempFile = File(parent, "${memoryFile.name}.tmp")
+                tempFile.writeText(memory.markdown)
+                if (!tempFile.renameTo(memoryFile)) {
+                    memoryFile.writeText(memory.markdown)
+                    tempFile.delete()
+                }
+            }
+        }
+    }
+}
+
 @Serializable
 private data class StoredAgentChatHistory(
     val selectedAgentModelName: String = AgentChatAgentOption.GEMINI_3_5_FLASH.modelName,
@@ -97,18 +148,12 @@ private data class StoredAgentChatHistory(
 ) {
     fun toSnapshot(): AgentChatHistorySnapshot {
         val restoredMessages = messages.mapNotNull { it.toMessageOrNull() }
-        val restoredMemory =
-            if (memory.shortTerm.entries.isEmpty() && restoredMessages.isNotEmpty()) {
-                memory.withShortTermFromMessages(restoredMessages)
-            } else {
-                memory
-            }
         return AgentChatHistorySnapshot(
             selectedAgent =
                 AgentChatAgentOption.entries.firstOrNull { it.modelName == selectedAgentModelName }
                     ?: AgentChatAgentOption.GEMINI_3_5_FLASH,
             customTotalTokenLimit = customTotalTokenLimit,
-            memory = restoredMemory,
+            memory = memory,
             messages = restoredMessages,
         )
     }
@@ -118,7 +163,7 @@ private data class StoredAgentChatHistory(
             StoredAgentChatHistory(
                 selectedAgentModelName = snapshot.selectedAgent.modelName,
                 customTotalTokenLimit = snapshot.customTotalTokenLimit,
-                memory = snapshot.memory.withShortTermFromMessages(snapshot.messages),
+                memory = snapshot.memory,
                 messages = snapshot.messages.filterNot { it.isLoading }.map(StoredAgentChatMessage::fromMessage),
             )
     }
@@ -164,6 +209,10 @@ interface AgentChatHistoryBindings {
     @Binds
     @Singleton
     fun bindAgentChatHistoryStore(store: JsonAgentChatHistoryStore): AgentChatHistoryStore
+
+    @Binds
+    @Singleton
+    fun bindAgentChatLongTermMemoryStore(store: MarkdownAgentChatLongTermMemoryStore): AgentChatLongTermMemoryStore
 }
 
 @Module

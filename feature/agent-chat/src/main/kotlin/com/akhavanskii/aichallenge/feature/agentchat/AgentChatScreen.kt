@@ -120,7 +120,17 @@ fun AgentChatScreen(
             )
 
             MemoryLayersSummary(
+                messages = state.messages,
                 memory = state.memory,
+                taskContextInput = state.taskContextInput,
+                isLongTermMemoryDirty = state.isLongTermMemoryDirty,
+                enabled = !state.isLoading,
+                canSaveLongTermMemory = state.canSaveLongTermMemory,
+                canClearTaskContext = state.canClearTaskContext,
+                onTaskContextChanged = { onAction(AgentChatAction.TaskContextChanged(it)) },
+                onLongTermMemoryChanged = { onAction(AgentChatAction.LongTermMemoryChanged(it)) },
+                onSaveLongTermMemory = { onAction(AgentChatAction.SaveLongTermMemory) },
+                onClearTaskContext = { onAction(AgentChatAction.ClearTaskContext) },
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -180,11 +190,25 @@ fun AgentChatScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MemoryLayersSummary(
+    messages: List<AgentChatMessage>,
     memory: AgentChatMemorySnapshot,
+    taskContextInput: String,
+    isLongTermMemoryDirty: Boolean,
+    enabled: Boolean,
+    canSaveLongTermMemory: Boolean,
+    canClearTaskContext: Boolean,
+    onTaskContextChanged: (String) -> Unit,
+    onLongTermMemoryChanged: (String) -> Unit,
+    onSaveLongTermMemory: () -> Unit,
+    onClearTaskContext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isTaskContextEditorVisible by remember { mutableStateOf(false) }
+    var isLongTermMemoryEditorVisible by remember { mutableStateOf(false) }
+
     Surface(
         modifier =
             modifier
@@ -207,10 +231,104 @@ private fun MemoryLayersSummary(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = memory.formatDebugDetails(),
+                text = memory.formatDebugDetails(messages),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = { isTaskContextEditorVisible = !isTaskContextEditorVisible },
+                    enabled = enabled,
+                    modifier = Modifier.testTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE),
+                ) {
+                    Text(if (isTaskContextEditorVisible) "Hide TaskContext" else "Edit TaskContext")
+                }
+                TextButton(
+                    onClick = { isLongTermMemoryEditorVisible = !isLongTermMemoryEditorVisible },
+                    enabled = enabled,
+                    modifier = Modifier.testTag(AgentChatTags.LONG_TERM_MEMORY_EDITOR_TOGGLE),
+                ) {
+                    Text(if (isLongTermMemoryEditorVisible) "Hide memory.md" else "Edit memory.md")
+                }
+            }
+            if (isTaskContextEditorVisible) {
+                OutlinedTextField(
+                    value = taskContextInput,
+                    onValueChange = onTaskContextChanged,
+                    enabled = enabled,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 96.dp)
+                            .testTag(AgentChatTags.TASK_CONTEXT_INPUT),
+                    label = { Text("TaskContext", style = MaterialTheme.typography.labelSmall) },
+                    minLines = 4,
+                    maxLines = TASK_CONTEXT_MAX_LINES,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    shape = RoundedCornerShape(8.dp),
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                )
+                TextButton(
+                    onClick = onClearTaskContext,
+                    enabled = canClearTaskContext,
+                    modifier = Modifier.testTag(AgentChatTags.CLEAR_TASK_CONTEXT_BUTTON),
+                ) {
+                    Text("Clear task")
+                }
+            }
+            if (isLongTermMemoryEditorVisible) {
+                OutlinedTextField(
+                    value = memory.longTermMarkdown.markdown,
+                    onValueChange = onLongTermMemoryChanged,
+                    enabled = enabled,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 132.dp)
+                            .testTag(AgentChatTags.LONG_TERM_MEMORY_INPUT),
+                    label = {
+                        Text(
+                            text = memory.longTermMarkdown.fileName,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    },
+                    minLines = 5,
+                    maxLines = LONG_TERM_MEMORY_MAX_LINES,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    shape = RoundedCornerShape(8.dp),
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                )
+            }
+            if (isLongTermMemoryEditorVisible || isLongTermMemoryDirty) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ChallengeButton(
+                        onClick = onSaveLongTermMemory,
+                        enabled = canSaveLongTermMemory,
+                        modifier = Modifier.testTag(AgentChatTags.SAVE_LONG_TERM_MEMORY_BUTTON),
+                    ) {
+                        Text("Save memory.md")
+                    }
+                    Text(
+                        text = if (isLongTermMemoryDirty) "Unsaved" else "Saved",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -454,6 +572,12 @@ object AgentChatTags {
     const val TOKEN_LIMIT_INPUT = "agent_chat_token_limit_input"
     const val TOKEN_SCENARIOS = "agent_chat_token_scenarios"
     const val MEMORY_LAYERS = "agent_chat_memory_layers"
+    const val TASK_CONTEXT_EDITOR_TOGGLE = "agent_chat_task_context_editor_toggle"
+    const val TASK_CONTEXT_INPUT = "agent_chat_task_context_input"
+    const val CLEAR_TASK_CONTEXT_BUTTON = "agent_chat_clear_task_context_button"
+    const val LONG_TERM_MEMORY_EDITOR_TOGGLE = "agent_chat_long_term_memory_editor_toggle"
+    const val LONG_TERM_MEMORY_INPUT = "agent_chat_long_term_memory_input"
+    const val SAVE_LONG_TERM_MEMORY_BUTTON = "agent_chat_save_long_term_memory_button"
 }
 
 private fun GeminiTokenUsage?.formatTokenSummary(
@@ -485,6 +609,8 @@ private fun String.shouldCollapse(): Boolean =
 private const val COLLAPSED_MESSAGE_BODY_LINES = 4
 private const val COLLAPSED_MESSAGE_CHAR_LIMIT = 220
 private const val INPUT_MAX_LINES = 5
+private const val TASK_CONTEXT_MAX_LINES = 8
+private const val LONG_TERM_MEMORY_MAX_LINES = 10
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 840)
 @Composable

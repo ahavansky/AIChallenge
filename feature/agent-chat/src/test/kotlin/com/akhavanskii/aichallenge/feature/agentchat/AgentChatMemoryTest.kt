@@ -8,8 +8,8 @@ import org.junit.Test
 
 class AgentChatMemoryTest {
     @Test
-    fun shortTermMemoryKeepsOnlySuccessfulConversationTurns() {
-        val memory =
+    fun shortTermMemoryIsSelectedFromSuccessfulChatHistory() {
+        val messages =
             listOf(
                 AgentChatMessage(role = AgentChatRole.USER, text = "First"),
                 AgentChatMessage(role = AgentChatRole.MODEL, text = "Answer"),
@@ -17,105 +17,121 @@ class AgentChatMemoryTest {
                 AgentChatMessage(role = AgentChatRole.MODEL, text = "Network error", isError = true),
                 AgentChatMessage(role = AgentChatRole.USER, text = "Pending"),
                 AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting", isLoading = true),
-            ).toShortTermMemory()
+                AgentChatMessage(role = AgentChatRole.USER, text = "Second"),
+                AgentChatMessage(role = AgentChatRole.MODEL, text = "Answer 2"),
+            )
 
         assertEquals(
             listOf(
-                AgentChatMemoryEntry(role = AgentChatMemoryRole.USER, text = "First"),
-                AgentChatMemoryEntry(role = AgentChatMemoryRole.MODEL, text = "Answer"),
+                AgentMessage.User("First"),
+                AgentMessage.Model("Answer"),
+                AgentMessage.User("Second"),
+                AgentMessage.Model("Answer 2"),
             ),
-            memory.entries,
+            messages.toShortTermPromptMessages(),
+        )
+        assertEquals(
+            listOf(
+                AgentMessage.User("Second"),
+                AgentMessage.Model("Answer 2"),
+            ),
+            messages.toShortTermPromptMessages(maxMessages = 2),
         )
     }
 
     @Test
-    fun userInputIsSavedIntoWorkingAndLongTermLayersSeparately() {
-        val memory =
-            AgentChatMemorySnapshot()
-                .recordUserInput(
-                    """
-                    Goal: build a stateful assistant
-                    Stage: planning
-                    Constraint: no real network in tests
-                    Result: memory model drafted
-                    Profile: Android Kotlin developer
-                    Preference: concise answers
-                    Decision: keep memory in feature agent-chat
-                    Knowledge: Gemini requests accept AgentMessage lists
-                    Invariant: always keep secrets out of commits
-                    """.trimIndent(),
-                )
+    fun taskContextIsParsedFromExplicitEditableText() {
+        val taskContext =
+            AgentChatTaskContext.fromEditableText(
+                """
+                Goal: build a memory layer demo
+                Stage: implementation
+                Plan: replace short-term snapshot with chat history
+                Constraint: tests must stay offline
+                Open question: how much markdown should fit into prompt
+                Result: prompt builder has memory selection
+                Preference: this line is not TaskContext
+                """.trimIndent(),
+            )
 
-        assertEquals("build a stateful assistant", memory.working.goal)
-        assertEquals("planning", memory.working.stage)
-        assertEquals(listOf("no real network in tests"), memory.working.constraints)
-        assertEquals(listOf("memory model drafted"), memory.working.intermediateResults)
-        assertEquals(listOf("Android Kotlin developer"), memory.longTerm.profile)
-        assertEquals(listOf("concise answers"), memory.longTerm.preferences)
-        assertEquals(listOf("keep memory in feature agent-chat"), memory.longTerm.decisions)
-        assertEquals(listOf("Gemini requests accept AgentMessage lists"), memory.longTerm.knowledge)
-        assertEquals(listOf("always keep secrets out of commits"), memory.longTerm.invariants)
+        assertEquals("build a memory layer demo", taskContext.goal)
+        assertEquals("implementation", taskContext.stage)
+        assertEquals(listOf("replace short-term snapshot with chat history"), taskContext.approvedPlan)
+        assertEquals(listOf("tests must stay offline"), taskContext.constraints)
+        assertEquals(listOf("how much markdown should fit into prompt"), taskContext.openQuestions)
+        assertEquals(listOf("prompt builder has memory selection"), taskContext.intermediateResults)
+        assertEquals(6, taskContext.itemCount)
     }
 
     @Test
-    fun promptBuilderIncludesOnlySelectedLayers() {
-        val memory =
-            AgentChatMemorySnapshot(
-                shortTerm =
-                    AgentChatShortTermMemory(
-                        entries =
-                            listOf(
-                                AgentChatMemoryEntry(role = AgentChatMemoryRole.USER, text = "Earlier question"),
-                                AgentChatMemoryEntry(role = AgentChatMemoryRole.MODEL, text = "Earlier answer"),
-                            ),
-                    ),
-                working = AgentChatWorkingMemory(goal = "Ship memory layers"),
-                longTerm = AgentChatLongTermMemory(preferences = listOf("Answer in Russian")),
-            )
-
+    fun promptBuilderIncludesOnlySelectedSources() {
         val prepared =
             AgentChatMemoryPromptBuilder.build(
                 latestUserMessage = "Continue",
-                memory = memory,
+                chatMessages =
+                    listOf(
+                        AgentChatMessage(role = AgentChatRole.USER, text = "Earlier question"),
+                        AgentChatMessage(role = AgentChatRole.MODEL, text = "Earlier answer"),
+                    ),
+                memory =
+                    AgentChatMemorySnapshot(
+                        taskContext = AgentChatTaskContext(goal = "Ship memory layers"),
+                        longTermMarkdown =
+                            AgentChatLongTermMarkdown(
+                                markdown =
+                                    """
+                                    # Preferences
+
+                                    - Answer in Russian
+                                    """.trimIndent(),
+                            ),
+                    ),
                 selection =
                     AgentChatMemorySelection(
-                        includeShortTerm = false,
-                        includeWorking = true,
-                        includeLongTerm = true,
+                        includeChatHistory = false,
+                        includeTaskContext = true,
+                        includeLongTermMarkdown = true,
                     ),
             )
 
         assertEquals(
             listOf(
-                AgentChatMemoryLayer.LONG_TERM,
-                AgentChatMemoryLayer.WORKING,
+                AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
+                AgentChatMemoryLayer.TASK_CONTEXT,
             ),
             prepared.requestContext.includedLayers,
         )
-        assertEquals(0, prepared.requestContext.shortTermMessageCount)
-        assertEquals(1, prepared.requestContext.workingItemCount)
-        assertEquals(1, prepared.requestContext.longTermItemCount)
-        assertTrue((prepared.messages[0] as AgentMessage.User).text.contains("Long-term memory"))
-        assertTrue((prepared.messages[1] as AgentMessage.User).text.contains("Working memory"))
+        assertEquals(0, prepared.requestContext.chatHistoryMessageCount)
+        assertEquals(1, prepared.requestContext.taskContextItemCount)
+        assertTrue(prepared.requestContext.longTermMarkdownChars > 0)
+        assertTrue((prepared.messages[0] as AgentMessage.User).text.contains("memory.md"))
+        assertTrue((prepared.messages[1] as AgentMessage.User).text.contains("TaskContext"))
         assertEquals(AgentMessage.User("Continue"), prepared.messages.last())
         assertFalse(prepared.messages.contains(AgentMessage.User("Earlier question")))
     }
 
     @Test
-    fun promptBuilderShowsHowMemoryChangesPrompt() {
+    fun promptBuilderShowsHowSourcesChangePrompt() {
         val basePrompt =
             AgentChatMemoryPromptBuilder.build(
                 latestUserMessage = "How should I answer?",
+                chatMessages = emptyList(),
                 memory = AgentChatMemorySnapshot(),
             )
         val personalizedPrompt =
             AgentChatMemoryPromptBuilder.build(
                 latestUserMessage = "How should I answer?",
+                chatMessages = emptyList(),
                 memory =
                     AgentChatMemorySnapshot(
-                        longTerm =
-                            AgentChatLongTermMemory(
-                                preferences = listOf("Prefer concise Kotlin-oriented answers"),
+                        longTermMarkdown =
+                            AgentChatLongTermMarkdown(
+                                markdown =
+                                    """
+                                    # Preferences
+
+                                    - Prefer concise Kotlin-oriented answers.
+                                    """.trimIndent(),
                             ),
                     ),
             )
@@ -127,5 +143,18 @@ class AgentChatMemoryTest {
             },
         )
         assertTrue(personalizedPrompt.requestContext.promptPreview.contains("Long-term memory"))
+    }
+
+    @Test
+    fun defaultMarkdownTemplateIsVisibleButNotSentToPrompt() {
+        val prepared =
+            AgentChatMemoryPromptBuilder.build(
+                latestUserMessage = "Continue",
+                chatMessages = emptyList(),
+                memory = AgentChatMemorySnapshot(),
+            )
+
+        assertFalse(AgentChatLongTermMarkdown().hasMeaningfulContent)
+        assertEquals(listOf(AgentMessage.User("Continue")), prepared.messages)
     }
 }

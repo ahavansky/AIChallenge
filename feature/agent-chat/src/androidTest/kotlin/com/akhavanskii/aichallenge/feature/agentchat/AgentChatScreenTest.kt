@@ -11,13 +11,16 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -137,36 +140,45 @@ class AgentChatScreenTest {
 
     @Test
     fun memoryLayersSummaryIsDisplayed() {
+        val taskContext =
+            AgentChatTaskContext(
+                goal = "Build memory",
+                constraints = listOf("Keep tests offline"),
+            )
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {
                 AgentChatScreen(
                     state =
                         AgentChatUiState(
+                            messages =
+                                listOf(
+                                    AgentChatMessage(role = AgentChatRole.USER, text = "Question"),
+                                    AgentChatMessage(role = AgentChatRole.MODEL, text = "Answer"),
+                                ),
+                            taskContextInput = taskContext.toEditableText(),
                             memory =
                                 AgentChatMemorySnapshot(
-                                    shortTerm =
-                                        AgentChatShortTermMemory(
-                                            entries =
-                                                listOf(
-                                                    AgentChatMemoryEntry(
-                                                        role = AgentChatMemoryRole.USER,
-                                                        text = "Question",
-                                                    ),
-                                                ),
+                                    taskContext = taskContext,
+                                    longTermMarkdown =
+                                        AgentChatLongTermMarkdown(
+                                            markdown =
+                                                """
+                                                # Preferences
+
+                                                - Concise
+                                                """.trimIndent(),
                                         ),
-                                    working = AgentChatWorkingMemory(goal = "Build memory"),
-                                    longTerm = AgentChatLongTermMemory(preferences = listOf("Concise")),
                                     lastRequest =
                                         AgentChatMemoryRequestContext(
                                             includedLayers =
                                                 listOf(
                                                     AgentChatMemoryLayer.SHORT_TERM,
-                                                    AgentChatMemoryLayer.WORKING,
-                                                    AgentChatMemoryLayer.LONG_TERM,
+                                                    AgentChatMemoryLayer.TASK_CONTEXT,
+                                                    AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
                                                 ),
-                                            shortTermMessageCount = 1,
-                                            workingItemCount = 1,
-                                            longTermItemCount = 1,
+                                            chatHistoryMessageCount = 2,
+                                            taskContextItemCount = 2,
+                                            longTermMarkdownChars = 16,
                                         ),
                                 ),
                         ),
@@ -177,11 +189,70 @@ class AgentChatScreenTest {
         }
 
         composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS).assertIsDisplayed()
-        composeRule.onNodeWithText("Short-term (1 messages)", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Short-term (2 messages)", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Source: chat history DB", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("User: Question", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Source: TaskContext", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Goal: Build memory", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Preference: Concise", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Prompt context: Short-term, Working, Long-term", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Constraint: Keep tests offline", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Source: agent_chat_memory.md", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Concise", substring = true).assertIsDisplayed()
+        composeRule
+            .onNodeWithText("Prompt context: Short-term, TaskContext, Long-term markdown", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.LONG_TERM_MEMORY_EDITOR_TOGGLE).assertIsDisplayed()
+        composeRule.onAllNodesWithTag(AgentChatTags.TASK_CONTEXT_INPUT).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(AgentChatTags.LONG_TERM_MEMORY_INPUT).assertCountEquals(0)
+    }
+
+    @Test
+    fun memoryEditorsDispatchActions() {
+        var state by mutableStateOf(AgentChatUiState())
+        val actions = mutableListOf<AgentChatAction>()
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = state,
+                    onAction = { action ->
+                        actions += action
+                        state =
+                            when (action) {
+                                is AgentChatAction.TaskContextChanged ->
+                                    state.copy(
+                                        taskContextInput = action.input,
+                                        memory = state.memory.withTaskContext(AgentChatTaskContext.fromEditableText(action.input)),
+                                    )
+                                is AgentChatAction.LongTermMemoryChanged ->
+                                    state.copy(
+                                        memory =
+                                            state.memory.withLongTermMarkdown(
+                                                state.memory.longTermMarkdown.copy(markdown = action.markdown),
+                                            ),
+                                        isLongTermMemoryDirty = true,
+                                    )
+                                AgentChatAction.SaveLongTermMemory -> state.copy(isLongTermMemoryDirty = false)
+                                else -> state
+                            }
+                    },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE).performClick()
+        composeRule.onNodeWithTag(AgentChatTags.TASK_CONTEXT_INPUT).performScrollTo().performTextInput("\nGoal: Demo")
+        composeRule.onNodeWithTag(AgentChatTags.LONG_TERM_MEMORY_EDITOR_TOGGLE).performScrollTo().performClick()
+        composeRule.onNodeWithTag(AgentChatTags.LONG_TERM_MEMORY_INPUT).performScrollTo().performTextInput("\n- Answer briefly")
+        composeRule
+            .onNodeWithTag(AgentChatTags.SAVE_LONG_TERM_MEMORY_BUTTON)
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+
+        assertTrue(actions.any { it is AgentChatAction.TaskContextChanged })
+        assertTrue(actions.any { it is AgentChatAction.LongTermMemoryChanged })
+        assertTrue(actions.contains(AgentChatAction.SaveLongTermMemory))
     }
 
     @Test

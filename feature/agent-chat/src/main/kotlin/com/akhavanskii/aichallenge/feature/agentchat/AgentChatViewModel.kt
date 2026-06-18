@@ -25,6 +25,7 @@ class AgentChatViewModel
     constructor(
         private val llmAgent: LlmAgent,
         private val historyStore: AgentChatHistoryStore,
+        private val longTermMemoryStore: AgentChatLongTermMemoryStore,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
@@ -34,11 +35,15 @@ class AgentChatViewModel
         init {
             viewModelScope.launch {
                 val snapshot = historyStore.load()
+                val longTermMemory = longTermMemoryStore.load()
                 mutableUiState.update { current ->
                     if (current == AgentChatUiState()) {
+                        val memory = snapshot.memory.withLongTermMarkdown(longTermMemory)
                         current.copy(
                             messages = snapshot.messages,
-                            memory = snapshot.memory.withShortTermFromMessages(snapshot.messages),
+                            memory = memory,
+                            taskContextInput = memory.taskContext.toEditableText(),
+                            isLongTermMemoryDirty = false,
                             selectedAgent = snapshot.selectedAgent,
                             customTotalTokenLimit =
                                 snapshot.customTotalTokenLimit?.coerceAtMost(snapshot.selectedAgent.totalTokenLimit),
@@ -54,9 +59,13 @@ class AgentChatViewModel
             when (action) {
                 is AgentChatAction.AgentChanged -> onAgentChanged(action.agent)
                 is AgentChatAction.InputChanged -> onInputChanged(action.input)
+                is AgentChatAction.LongTermMemoryChanged -> onLongTermMemoryChanged(action.markdown)
                 is AgentChatAction.ScenarioSelected -> onScenarioSelected(action.scenario)
+                is AgentChatAction.TaskContextChanged -> onTaskContextChanged(action.input)
                 is AgentChatAction.TokenLimitChanged -> onTokenLimitChanged(action.input)
                 AgentChatAction.ClearChat -> clearChat()
+                AgentChatAction.ClearTaskContext -> clearTaskContext()
+                AgentChatAction.SaveLongTermMemory -> saveLongTermMemory()
                 AgentChatAction.Stop -> stopActiveRequest()
                 AgentChatAction.Submit -> submit()
             }
@@ -73,7 +82,8 @@ class AgentChatViewModel
                     it.copy(
                         input = "",
                         messages = emptyList(),
-                        memory = it.memory.clearTaskMemory(),
+                        memory = it.memory.clearTaskContext(),
+                        taskContextInput = AgentChatTaskContext().toEditableText(),
                         customTotalTokenLimit =
                             if (scenario.usesDemoBudget) {
                                 totalTokenLimit
@@ -125,6 +135,49 @@ class AgentChatViewModel
             }
         }
 
+        private fun onTaskContextChanged(input: String) {
+            updateStateAndPersist { current ->
+                if (current.isLoading) {
+                    current
+                } else {
+                    current.copy(
+                        taskContextInput = input,
+                        memory = current.memory.withTaskContext(AgentChatTaskContext.fromEditableText(input)),
+                    )
+                }
+            }
+        }
+
+        private fun onLongTermMemoryChanged(markdown: String) {
+            mutableUiState.update { current ->
+                if (current.isLoading) {
+                    current
+                } else {
+                    current.copy(
+                        memory =
+                            current.memory.withLongTermMarkdown(
+                                current.memory.longTermMarkdown.copy(markdown = markdown),
+                            ),
+                        isLongTermMemoryDirty = true,
+                    )
+                }
+            }
+        }
+
+        private fun saveLongTermMemory() {
+            val memoryToSave = mutableUiState.value.memory.longTermMarkdown
+            viewModelScope.launch {
+                longTermMemoryStore.save(memoryToSave)
+                mutableUiState.update { current ->
+                    if (current.memory.longTermMarkdown == memoryToSave) {
+                        current.copy(isLongTermMemoryDirty = false)
+                    } else {
+                        current
+                    }
+                }
+            }
+        }
+
         private fun clearChat() {
             updateStateAndPersist { current ->
                 if (current.isLoading) {
@@ -133,7 +186,21 @@ class AgentChatViewModel
                     current.copy(
                         input = "",
                         messages = emptyList(),
-                        memory = current.memory.clearTaskMemory(),
+                        memory = current.memory.copy(lastRequest = null),
+                    )
+                }
+            }
+        }
+
+        private fun clearTaskContext() {
+            updateStateAndPersist { current ->
+                if (current.isLoading) {
+                    current
+                } else {
+                    val emptyTaskContext = AgentChatTaskContext()
+                    current.copy(
+                        memory = current.memory.withTaskContext(emptyTaskContext),
+                        taskContextInput = emptyTaskContext.toEditableText(),
                     )
                 }
             }
@@ -166,27 +233,25 @@ class AgentChatViewModel
                     text = "Waiting for ${currentState.selectedAgent.title}",
                     isLoading = true,
                 )
-            val memoryForRequest = currentState.memory.recordUserInput(currentState.input)
             val preparedPrompt =
                 AgentChatMemoryPromptBuilder.build(
                     latestUserMessage = prompt,
-                    memory = memoryForRequest,
+                    chatMessages = currentState.messages,
+                    memory = currentState.memory,
                     selection =
                         AgentChatMemorySelection(
-                            includeShortTerm = true,
-                            includeWorking = true,
-                            includeLongTerm = true,
+                            includeChatHistory = true,
+                            includeTaskContext = true,
+                            includeLongTermMarkdown = true,
                         ),
                 )
             val updatedState =
                 mutableUiState.updateAndGet {
-                    val stateWithLoading =
-                        it.copy(
-                            input = "",
-                            messages = currentState.messages + userMessage + loadingMessage,
-                            memory = memoryForRequest.withLastRequest(preparedPrompt.requestContext),
-                        )
-                    stateWithLoading.withSyncedShortTermMemory()
+                    it.copy(
+                        input = "",
+                        messages = currentState.messages + userMessage + loadingMessage,
+                        memory = currentState.memory.withLastRequest(preparedPrompt.requestContext),
+                    )
                 }
             persistHistory(updatedState)
 
@@ -232,7 +297,7 @@ class AgentChatViewModel
                                     ),
                                 ),
                         )
-                    stoppedState.withSyncedShortTermMemory()
+                    stoppedState
                 }
             persistHistory(updatedState)
         }
@@ -255,7 +320,7 @@ class AgentChatViewModel
                                         tokenUsage = tokenUsage,
                                     ),
                                 ),
-                        ).withSyncedShortTermMemory()
+                        )
                 }
             persistHistory(updatedState)
         }
@@ -292,13 +357,10 @@ class AgentChatViewModel
         private fun AgentChatUiState.toHistorySnapshot(): AgentChatHistorySnapshot =
             AgentChatHistorySnapshot(
                 messages = messages.filterNot { it.isLoading },
-                memory = memory.withShortTermFromMessages(messages),
+                memory = memory,
                 selectedAgent = selectedAgent,
                 customTotalTokenLimit = customTotalTokenLimit,
             )
-
-        private fun AgentChatUiState.withSyncedShortTermMemory(): AgentChatUiState =
-            copy(memory = memory.withShortTermFromMessages(messages))
 
         private fun List<AgentChatMessage>.toAgentMessages(): List<AgentMessage> {
             val agentMessages = mutableListOf<AgentMessage>()
@@ -364,7 +426,6 @@ class AgentChatViewModel
                     mutableUiState.updateAndGet { current ->
                         current
                             .copy(messages = current.messages + userMessage + loadingMessage)
-                            .withSyncedShortTermMemory()
                     }
                 persistHistory(updatedState)
 
@@ -417,7 +478,7 @@ class AgentChatViewModel
                                         text = text,
                                         isError = true,
                                     ),
-                        ).withSyncedShortTermMemory()
+                        )
                 }
             persistHistory(updatedState)
         }

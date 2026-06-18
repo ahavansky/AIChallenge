@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -49,16 +50,13 @@ class JsonAgentChatHistoryStoreTest {
 
             val expectedMessages = snapshot.messages.filterNot { it.isLoading }
             assertEquals(
-                snapshot.copy(
-                    messages = expectedMessages,
-                    memory = snapshot.memory.withShortTermFromMessages(expectedMessages),
-                ),
+                snapshot.copy(messages = expectedMessages),
                 store.load(),
             )
         }
 
     @Test
-    fun saveAndLoadMemoryLayersRoundTrip() =
+    fun saveAndLoadTaskContextRoundTrip() =
         runTest {
             val historyFile = File(temporaryFolder.root, "history.json")
             val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
@@ -71,21 +69,20 @@ class JsonAgentChatHistoryStoreTest {
                         ),
                     memory =
                         AgentChatMemorySnapshot(
-                            working = AgentChatWorkingMemory(goal = "build memory"),
-                            longTerm =
-                                AgentChatLongTermMemory(
-                                    preferences = listOf("concise answers"),
-                                    invariants = listOf("do not commit secrets"),
+                            taskContext =
+                                AgentChatTaskContext(
+                                    goal = "build memory",
+                                    constraints = listOf("tests stay offline"),
                                 ),
                             lastRequest =
                                 AgentChatMemoryRequestContext(
                                     includedLayers =
                                         listOf(
-                                            AgentChatMemoryLayer.WORKING,
-                                            AgentChatMemoryLayer.LONG_TERM,
+                                            AgentChatMemoryLayer.TASK_CONTEXT,
+                                            AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
                                         ),
-                                    workingItemCount = 1,
-                                    longTermItemCount = 2,
+                                    taskContextItemCount = 2,
+                                    longTermMarkdownChars = 42,
                                     promptPreview = "preview",
                                 ),
                         ),
@@ -94,9 +91,37 @@ class JsonAgentChatHistoryStoreTest {
             store.save(snapshot)
 
             assertEquals(
-                snapshot.copy(memory = snapshot.memory.withShortTermFromMessages(snapshot.messages)),
+                snapshot.copy(
+                    memory =
+                        snapshot.memory.copy(
+                            lastRequest = snapshot.memory.lastRequest?.copy(promptPreview = ""),
+                        ),
+                ),
                 store.load(),
             )
+            assertFalse(historyFile.readText().contains("preview"))
+        }
+
+    @Test
+    fun saveAndLoadLongTermMarkdownRoundTrip() =
+        runTest {
+            val memoryFile = File(temporaryFolder.root, DEFAULT_LONG_TERM_MEMORY_FILE_NAME)
+            val store = createLongTermStore(memoryFile, StandardTestDispatcher(testScheduler))
+            val memory =
+                AgentChatLongTermMarkdown(
+                    fileName = DEFAULT_LONG_TERM_MEMORY_FILE_NAME,
+                    markdown =
+                        """
+                        # Preferences
+
+                        - Answer briefly.
+                        """.trimIndent(),
+                )
+
+            store.save(memory)
+
+            assertEquals(memory, store.load())
+            assertEquals(memory.markdown, memoryFile.readText())
         }
 
     @Test
@@ -122,6 +147,15 @@ class JsonAgentChatHistoryStoreTest {
                     encodeDefaults = true
                     explicitNulls = false
                 },
+            dispatcher = dispatcher,
+        )
+
+    private fun createLongTermStore(
+        memoryFile: File,
+        dispatcher: CoroutineDispatcher,
+    ): MarkdownAgentChatLongTermMemoryStore =
+        MarkdownAgentChatLongTermMemoryStore(
+            memoryFile = memoryFile,
             dispatcher = dispatcher,
         )
 }

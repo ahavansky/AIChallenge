@@ -462,66 +462,136 @@ class AgentChatViewModelTest {
         }
 
     @Test
-    fun submitSavesExplicitMemoryLayersAndUsesThemInPrompt() =
+    fun submitUsesTaskContextAndLongTermMarkdownInPrompt() =
         runTest {
             val fakeAgent = FakeLlmAgent()
             val historyStore = FakeAgentChatHistoryStore()
-            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
+            val longTermMemoryStore =
+                FakeAgentChatLongTermMemoryStore(
+                    AgentChatLongTermMarkdown(
+                        markdown =
+                            """
+                            # Preferences
+
+                            - Answer with concise Kotlin examples.
+                            """.trimIndent(),
+                    ),
+                )
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore = historyStore,
+                    longTermMemoryStore = longTermMemoryStore,
+                )
+            runCurrent()
 
             viewModel.onAction(
-                AgentChatAction.InputChanged(
+                AgentChatAction.TaskContextChanged(
                     """
                     Goal: build a memory layer demo
+                    Stage: implementation
                     Constraint: tests must stay offline
-                    Preference: answer with concise Kotlin examples
-                    Invariant: never commit API keys
                     """.trimIndent(),
                 ),
             )
+            viewModel.onAction(AgentChatAction.InputChanged("Create the plan"))
             viewModel.onAction(AgentChatAction.Submit)
             runCurrent()
 
             val memory = viewModel.uiState.value.memory
-            assertEquals("build a memory layer demo", memory.working.goal)
-            assertEquals(listOf("tests must stay offline"), memory.working.constraints)
-            assertEquals(listOf("answer with concise Kotlin examples"), memory.longTerm.preferences)
-            assertEquals(listOf("never commit API keys"), memory.longTerm.invariants)
+            assertEquals("build a memory layer demo", memory.taskContext.goal)
+            assertEquals("implementation", memory.taskContext.stage)
+            assertEquals(listOf("tests must stay offline"), memory.taskContext.constraints)
             assertEquals(
                 listOf(
-                    AgentChatMemoryLayer.LONG_TERM,
-                    AgentChatMemoryLayer.WORKING,
+                    AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
+                    AgentChatMemoryLayer.TASK_CONTEXT,
                 ),
                 memory.lastRequest?.includedLayers,
             )
             assertTrue(
                 (fakeAgent.calls.single().messages[0] as AgentMessage.User)
                     .text
-                    .contains("Long-term memory"),
+                    .contains("Answer with concise Kotlin examples"),
             )
             assertTrue(
                 (fakeAgent.calls.single().messages[1] as AgentMessage.User)
                     .text
-                    .contains("Working memory"),
+                    .contains("TaskContext"),
             )
-            assertEquals(viewModel.uiState.value.memory, historyStore.snapshot.memory)
+            assertEquals(
+                AgentMessage.User("Create the plan"),
+                fakeAgent
+                    .calls
+                    .single()
+                    .messages
+                    .last(),
+            )
+            assertEquals(memory.taskContext, historyStore.snapshot.memory.taskContext)
         }
 
     @Test
-    fun clearChatClearsTaskMemoryButKeepsLongTermMemory() =
+    fun saveLongTermMemoryWritesMarkdownStore() =
+        runTest {
+            val longTermMemoryStore = FakeAgentChatLongTermMemoryStore()
+            val viewModel = createViewModel(longTermMemoryStore = longTermMemoryStore)
+
+            viewModel.onAction(
+                AgentChatAction.LongTermMemoryChanged(
+                    """
+                    # Invariants
+
+                    - Never commit API keys.
+                    """.trimIndent(),
+                ),
+            )
+            assertTrue(viewModel.uiState.value.isLongTermMemoryDirty)
+
+            viewModel.onAction(AgentChatAction.SaveLongTermMemory)
+            runCurrent()
+
+            assertFalse(viewModel.uiState.value.isLongTermMemoryDirty)
+            assertTrue(longTermMemoryStore.memory.markdown.contains("Never commit API keys"))
+        }
+
+    @Test
+    fun clearChatKeepsTaskContextAndLongTermMemory() =
         runTest {
             val fakeAgent = FakeLlmAgent()
             val viewModel = createViewModel(fakeAgent)
 
-            viewModel.onAction(AgentChatAction.InputChanged("Preference: answer briefly"))
+            viewModel.onAction(AgentChatAction.TaskContextChanged("Goal: keep task context"))
+            viewModel.onAction(AgentChatAction.LongTermMemoryChanged("# Preferences\n\n- Answer briefly"))
+            viewModel.onAction(AgentChatAction.InputChanged("First"))
             viewModel.onAction(AgentChatAction.Submit)
             runCurrent()
             viewModel.onAction(AgentChatAction.ClearChat)
             runCurrent()
 
             assertEquals(emptyList<AgentChatMessage>(), viewModel.uiState.value.messages)
-            assertEquals(0, viewModel.uiState.value.memory.shortTerm.messageCount)
-            assertEquals(0, viewModel.uiState.value.memory.working.itemCount)
-            assertEquals(listOf("answer briefly"), viewModel.uiState.value.memory.longTerm.preferences)
+            assertEquals("keep task context", viewModel.uiState.value.memory.taskContext.goal)
+            assertTrue(
+                viewModel.uiState.value.memory.longTermMarkdown.markdown
+                    .contains("Answer briefly"),
+            )
+            assertEquals(null, viewModel.uiState.value.memory.lastRequest)
+        }
+
+    @Test
+    fun clearTaskContextClearsOnlyWorkingMemory() =
+        runTest {
+            val viewModel = createViewModel()
+
+            viewModel.onAction(AgentChatAction.TaskContextChanged("Goal: remove me"))
+            viewModel.onAction(AgentChatAction.LongTermMemoryChanged("# Preferences\n\n- Keep me"))
+            viewModel.onAction(AgentChatAction.ClearTaskContext)
+            runCurrent()
+
+            assertEquals(0, viewModel.uiState.value.memory.taskContext.itemCount)
+            assertTrue(
+                viewModel.uiState.value.memory.longTermMarkdown.markdown
+                    .contains("Keep me"),
+            )
             assertEquals(null, viewModel.uiState.value.memory.lastRequest)
         }
 
@@ -700,7 +770,8 @@ class AgentChatViewModelTest {
     private fun createViewModel(
         fakeAgent: FakeLlmAgent = FakeLlmAgent(),
         historyStore: AgentChatHistoryStore = FakeAgentChatHistoryStore(),
-    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore)
+        longTermMemoryStore: AgentChatLongTermMemoryStore = FakeAgentChatLongTermMemoryStore(),
+    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore, longTermMemoryStore)
 
     private fun completedResult(
         text: String,
@@ -768,6 +839,19 @@ class AgentChatViewModelTest {
 
         override suspend fun save(snapshot: AgentChatHistorySnapshot) {
             this.snapshot = snapshot
+        }
+    }
+
+    private class FakeAgentChatLongTermMemoryStore(
+        initialMemory: AgentChatLongTermMarkdown = AgentChatLongTermMarkdown(),
+    ) : AgentChatLongTermMemoryStore {
+        var memory = initialMemory
+            private set
+
+        override suspend fun load(): AgentChatLongTermMarkdown = memory
+
+        override suspend fun save(memory: AgentChatLongTermMarkdown) {
+            this.memory = memory
         }
     }
 }
