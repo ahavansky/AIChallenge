@@ -1,6 +1,7 @@
 package com.akhavanskii.aichallenge.feature.agentchat
 
 import android.content.res.Configuration
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
@@ -34,12 +36,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.akhavanskii.aichallenge.core.designsystem.ChallengeButton
+import com.akhavanskii.aichallenge.core.designsystem.ChallengeMarkdownBody
+import com.akhavanskii.aichallenge.core.designsystem.ChallengeMarkdownText
 import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import java.util.Locale
 
@@ -50,67 +57,78 @@ fun AgentChatScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val historyScrollState = rememberScrollState()
+    val contentScrollState = rememberScrollState()
 
     Column(
         modifier =
             modifier
                 .fillMaxSize()
                 .padding(WindowInsets.safeDrawing.asPaddingValues())
+                .imePadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Agent Chat",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AgentModelMenu(
-                    selectedAgent = state.selectedAgent,
-                    enabled = state.canChangeAgent,
-                    onSelected = { onAction(AgentChatAction.AgentChanged(it)) },
-                )
-                TextButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag(AgentChatTags.BACK_BUTTON),
-                ) {
-                    Text("Back")
-                }
-            }
-        }
-
-        TokenUsageSummary(
-            selectedAgent = state.selectedAgent,
-            tokenUsage = state.latestTokenUsage,
-            customTotalTokenLimit = state.customTotalTokenLimit,
-            enabled = !state.isLoading,
-            onTokenLimitChanged = { onAction(AgentChatAction.TokenLimitChanged(it)) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        ScenarioControls(
-            enabled = !state.isLoading,
-            onSelected = { onAction(AgentChatAction.ScenarioSelected(it)) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        ConversationHistory(
-            messages = state.messages,
+        Column(
             modifier =
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .verticalScroll(historyScrollState),
-        )
+                    .verticalScroll(contentScrollState),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Agent Chat",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AgentModelMenu(
+                        selectedAgent = state.selectedAgent,
+                        enabled = state.canChangeAgent,
+                        onSelected = { onAction(AgentChatAction.AgentChanged(it)) },
+                    )
+                    TextButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag(AgentChatTags.BACK_BUTTON),
+                    ) {
+                        Text("Back")
+                    }
+                }
+            }
+
+            TokenUsageSummary(
+                selectedAgent = state.selectedAgent,
+                tokenUsage = state.latestTokenUsage,
+                customTotalTokenLimit = state.customTotalTokenLimit,
+                enabled = !state.isLoading,
+                onTokenLimitChanged = { onAction(AgentChatAction.TokenLimitChanged(it)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            ScenarioControls(
+                enabled = !state.isLoading,
+                onSelected = { onAction(AgentChatAction.ScenarioSelected(it)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            MemoryLayersSummary(
+                memory = state.memory,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            ConversationHistory(
+                messages = state.messages,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         OutlinedTextField(
             value = state.input,
@@ -124,6 +142,7 @@ fun AgentChatScreen(
             label = { Text("Message") },
             placeholder = { Text("Ask a follow-up.") },
             minLines = 2,
+            maxLines = INPUT_MAX_LINES,
             shape = RoundedCornerShape(8.dp),
             colors =
                 OutlinedTextFieldDefaults.colors(
@@ -157,6 +176,41 @@ fun AgentChatScreen(
             ) {
                 Text("Stop")
             }
+        }
+    }
+}
+
+@Composable
+private fun MemoryLayersSummary(
+    memory: AgentChatMemorySnapshot,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.MEMORY_LAYERS),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = "Memory layers",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = memory.formatDebugDetails(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -260,8 +314,20 @@ private fun ChatMessagePanel(
     modifier: Modifier = Modifier,
     isError: Boolean = false,
 ) {
+    var expanded by remember(body) { mutableStateOf(false) }
+    val canToggle = body.shouldCollapse()
+    val bodyMaxLines = if (canToggle && !expanded) COLLAPSED_MESSAGE_BODY_LINES else Int.MAX_VALUE
+    val bodyColor = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .clickable(enabled = canToggle) { expanded = !expanded }
+                .semantics {
+                    if (canToggle) {
+                        stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    }
+                },
         shape = RoundedCornerShape(8.dp),
         color =
             if (isError) {
@@ -283,11 +349,20 @@ private fun ChatMessagePanel(
                 color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (expanded) {
+                ChallengeMarkdownBody(
+                    body = body,
+                    color = bodyColor,
+                )
+            } else {
+                ChallengeMarkdownText(
+                    text = body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = bodyColor,
+                    maxLines = bodyMaxLines,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -378,6 +453,7 @@ object AgentChatTags {
     const val TOKEN_USAGE = "agent_chat_token_usage"
     const val TOKEN_LIMIT_INPUT = "agent_chat_token_limit_input"
     const val TOKEN_SCENARIOS = "agent_chat_token_scenarios"
+    const val MEMORY_LAYERS = "agent_chat_memory_layers"
 }
 
 private fun GeminiTokenUsage?.formatTokenSummary(
@@ -402,6 +478,13 @@ private fun GeminiTokenUsage?.formatTokenSummary(
 }
 
 private fun Int?.formatTokenCount(): String = this?.let { String.format(Locale.US, "%,d", it) } ?: "unknown"
+
+private fun String.shouldCollapse(): Boolean =
+    lineSequence().count() > COLLAPSED_MESSAGE_BODY_LINES || length > COLLAPSED_MESSAGE_CHAR_LIMIT
+
+private const val COLLAPSED_MESSAGE_BODY_LINES = 4
+private const val COLLAPSED_MESSAGE_CHAR_LIMIT = 220
+private const val INPUT_MAX_LINES = 5
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 840)
 @Composable

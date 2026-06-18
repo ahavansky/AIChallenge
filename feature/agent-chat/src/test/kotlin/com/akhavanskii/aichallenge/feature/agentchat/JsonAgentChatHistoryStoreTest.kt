@@ -47,8 +47,54 @@ class JsonAgentChatHistoryStoreTest {
 
             store.save(snapshot)
 
+            val expectedMessages = snapshot.messages.filterNot { it.isLoading }
             assertEquals(
-                snapshot.copy(messages = snapshot.messages.filterNot { it.isLoading }),
+                snapshot.copy(
+                    messages = expectedMessages,
+                    memory = snapshot.memory.withShortTermFromMessages(expectedMessages),
+                ),
+                store.load(),
+            )
+        }
+
+    @Test
+    fun saveAndLoadMemoryLayersRoundTrip() =
+        runTest {
+            val historyFile = File(temporaryFolder.root, "history.json")
+            val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
+            val snapshot =
+                AgentChatHistorySnapshot(
+                    messages =
+                        listOf(
+                            AgentChatMessage(role = AgentChatRole.USER, text = "Goal: build memory"),
+                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Goal saved"),
+                        ),
+                    memory =
+                        AgentChatMemorySnapshot(
+                            working = AgentChatWorkingMemory(goal = "build memory"),
+                            longTerm =
+                                AgentChatLongTermMemory(
+                                    preferences = listOf("concise answers"),
+                                    invariants = listOf("do not commit secrets"),
+                                ),
+                            lastRequest =
+                                AgentChatMemoryRequestContext(
+                                    includedLayers =
+                                        listOf(
+                                            AgentChatMemoryLayer.WORKING,
+                                            AgentChatMemoryLayer.LONG_TERM,
+                                        ),
+                                    workingItemCount = 1,
+                                    longTermItemCount = 2,
+                                    promptPreview = "preview",
+                                ),
+                        ),
+                )
+
+            store.save(snapshot)
+
+            assertEquals(
+                snapshot.copy(memory = snapshot.memory.withShortTermFromMessages(snapshot.messages)),
                 store.load(),
             )
         }

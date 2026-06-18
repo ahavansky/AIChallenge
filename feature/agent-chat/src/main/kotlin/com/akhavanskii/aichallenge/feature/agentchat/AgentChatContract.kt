@@ -7,6 +7,7 @@ import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 data class AgentChatUiState(
     val input: String = "",
     val messages: List<AgentChatMessage> = emptyList(),
+    val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val selectedAgent: AgentChatAgentOption = AgentChatAgentOption.GEMINI_3_5_FLASH,
     val customTotalTokenLimit: Int? = null,
 ) : UiState {

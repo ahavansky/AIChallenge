@@ -462,6 +462,70 @@ class AgentChatViewModelTest {
         }
 
     @Test
+    fun submitSavesExplicitMemoryLayersAndUsesThemInPrompt() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val historyStore = FakeAgentChatHistoryStore()
+            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
+
+            viewModel.onAction(
+                AgentChatAction.InputChanged(
+                    """
+                    Goal: build a memory layer demo
+                    Constraint: tests must stay offline
+                    Preference: answer with concise Kotlin examples
+                    Invariant: never commit API keys
+                    """.trimIndent(),
+                ),
+            )
+            viewModel.onAction(AgentChatAction.Submit)
+            runCurrent()
+
+            val memory = viewModel.uiState.value.memory
+            assertEquals("build a memory layer demo", memory.working.goal)
+            assertEquals(listOf("tests must stay offline"), memory.working.constraints)
+            assertEquals(listOf("answer with concise Kotlin examples"), memory.longTerm.preferences)
+            assertEquals(listOf("never commit API keys"), memory.longTerm.invariants)
+            assertEquals(
+                listOf(
+                    AgentChatMemoryLayer.LONG_TERM,
+                    AgentChatMemoryLayer.WORKING,
+                ),
+                memory.lastRequest?.includedLayers,
+            )
+            assertTrue(
+                (fakeAgent.calls.single().messages[0] as AgentMessage.User)
+                    .text
+                    .contains("Long-term memory"),
+            )
+            assertTrue(
+                (fakeAgent.calls.single().messages[1] as AgentMessage.User)
+                    .text
+                    .contains("Working memory"),
+            )
+            assertEquals(viewModel.uiState.value.memory, historyStore.snapshot.memory)
+        }
+
+    @Test
+    fun clearChatClearsTaskMemoryButKeepsLongTermMemory() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val viewModel = createViewModel(fakeAgent)
+
+            viewModel.onAction(AgentChatAction.InputChanged("Preference: answer briefly"))
+            viewModel.onAction(AgentChatAction.Submit)
+            runCurrent()
+            viewModel.onAction(AgentChatAction.ClearChat)
+            runCurrent()
+
+            assertEquals(emptyList<AgentChatMessage>(), viewModel.uiState.value.messages)
+            assertEquals(0, viewModel.uiState.value.memory.shortTerm.messageCount)
+            assertEquals(0, viewModel.uiState.value.memory.working.itemCount)
+            assertEquals(listOf("answer briefly"), viewModel.uiState.value.memory.longTerm.preferences)
+            assertEquals(null, viewModel.uiState.value.memory.lastRequest)
+        }
+
+    @Test
     fun submitShowsErrorsButDoesNotSendThemBackInHistory() =
         runTest {
             val fakeAgent =

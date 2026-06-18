@@ -3,10 +3,15 @@ package com.akhavanskii.aichallenge.feature.agentchat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -40,6 +45,35 @@ class AgentChatScreenTest {
         composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsNotEnabled()
         composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput("Hello")
         composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsEnabled()
+    }
+
+    @Test
+    fun longDraftKeepsActionButtonsVisible() {
+        var state by mutableStateOf(AgentChatUiState())
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = state,
+                    onAction = { action ->
+                        if (action is AgentChatAction.InputChanged) {
+                            state = state.copy(input = action.input)
+                        }
+                    },
+                    onBack = {},
+                )
+            }
+        }
+
+        val longDraft =
+            (1..20).joinToString(separator = "\n") { line ->
+                "Constraint: line $line must stay editable without hiding actions"
+            }
+
+        composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput(longDraft)
+
+        composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.CLEAR_BUTTON).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.STOP_BUTTON).assertIsDisplayed()
     }
 
     @Test
@@ -99,6 +133,96 @@ class AgentChatScreenTest {
         composeRule.onNodeWithText("Req/history/resp: 3 / 12 / 5", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Total/limit: 17 / 1,114,112 (model), left 1,114,095", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Window: sliding ready | max 1,114,112", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun memoryLayersSummaryIsDisplayed() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            memory =
+                                AgentChatMemorySnapshot(
+                                    shortTerm =
+                                        AgentChatShortTermMemory(
+                                            entries =
+                                                listOf(
+                                                    AgentChatMemoryEntry(
+                                                        role = AgentChatMemoryRole.USER,
+                                                        text = "Question",
+                                                    ),
+                                                ),
+                                        ),
+                                    working = AgentChatWorkingMemory(goal = "Build memory"),
+                                    longTerm = AgentChatLongTermMemory(preferences = listOf("Concise")),
+                                    lastRequest =
+                                        AgentChatMemoryRequestContext(
+                                            includedLayers =
+                                                listOf(
+                                                    AgentChatMemoryLayer.SHORT_TERM,
+                                                    AgentChatMemoryLayer.WORKING,
+                                                    AgentChatMemoryLayer.LONG_TERM,
+                                                ),
+                                            shortTermMessageCount = 1,
+                                            workingItemCount = 1,
+                                            longTermItemCount = 1,
+                                        ),
+                                ),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS).assertIsDisplayed()
+        composeRule.onNodeWithText("Short-term (1 messages)", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("User: Question", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Goal: Build memory", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Preference: Concise", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Prompt context: Short-term, Working, Long-term", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun longMessagesAreCollapsedAndExpandOnClick() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            messages =
+                                listOf(
+                                    AgentChatMessage(
+                                        role = AgentChatRole.MODEL,
+                                        text =
+                                            """
+                                            Plan:
+                                            1. **Define** `AgentMessage` memory boundaries.
+                                            2. Add working memory fields.
+                                            3. Add long-term memory fields.
+                                            4. Build request prompt from selected layers.
+                                            5. Validate markdown rendering.
+                                            """.trimIndent(),
+                                    ),
+                                ),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        val message = composeRule.onNodeWithTag("${AgentChatTags.MESSAGE}_0")
+        message.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        composeRule.onNodeWithText("Define AgentMessage", substring = true).assertIsDisplayed()
+        composeRule.onAllNodesWithText("**Define**", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("`AgentMessage`", substring = true).assertCountEquals(0)
+
+        message.performClick()
+
+        message.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        composeRule.onNodeWithText("5.", substring = true).assertIsDisplayed()
     }
 
     @Test

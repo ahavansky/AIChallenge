@@ -14,10 +14,45 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+
+@Composable
+fun ChallengeMarkdownBody(
+    body: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    ResponseMarkdownBody(
+        body = body,
+        color = color,
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun ChallengeMarkdownText(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+) {
+    Text(
+        text = text.toInlineMarkdown(),
+        modifier = modifier,
+        style = style,
+        color = color,
+        maxLines = maxLines,
+        overflow = overflow,
+    )
+}
 
 @Composable
 internal fun ResponseMarkdownBody(
@@ -272,23 +307,38 @@ private fun String.toInlineMarkdown(): AnnotatedString =
 private fun AnnotatedString.Builder.appendInlineMarkdown(text: String) {
     var index = 0
     while (index < text.length) {
-        val start = text.indexOf("**", startIndex = index)
-        if (start == -1) {
-            append(text.substring(index))
-            return
+        when {
+            text.startsWith("**", startIndex = index) -> {
+                val end = text.indexOf("**", startIndex = index + 2)
+                if (end == -1) {
+                    append(text.substring(index))
+                    return
+                }
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(text.substring(index + 2, end))
+                }
+                index = end + 2
+            }
+            text[index] == '`' -> {
+                val end = text.indexOf('`', startIndex = index + 1)
+                if (end == -1) {
+                    append(text.substring(index))
+                    return
+                }
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
+                    append(text.substring(index + 1, end))
+                }
+                index = end + 1
+            }
+            else -> {
+                val nextBold = text.indexOf("**", startIndex = index).takeIf { it != -1 } ?: text.length
+                val nextCode = text.indexOf('`', startIndex = index).takeIf { it != -1 } ?: text.length
+                val nextMarker = minOf(nextBold, nextCode)
+                append(text.substring(index, nextMarker))
+                index = nextMarker
+            }
         }
-        val end = text.indexOf("**", startIndex = start + 2)
-        if (end == -1) {
-            append(text.substring(index))
-            return
-        }
-
-        append(text.substring(index, start))
-        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-            append(text.substring(start + 2, end))
-        }
-        index = end + 2
     }
 }
 
-private fun String.stripInlineMarkdown(): String = replace("**", "")
+private fun String.stripInlineMarkdown(): String = replace("**", "").replace("`", "")

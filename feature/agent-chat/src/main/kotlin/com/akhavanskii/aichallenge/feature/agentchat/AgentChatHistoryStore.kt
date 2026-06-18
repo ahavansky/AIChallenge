@@ -24,6 +24,7 @@ import javax.inject.Singleton
 
 data class AgentChatHistorySnapshot(
     val messages: List<AgentChatMessage> = emptyList(),
+    val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val selectedAgent: AgentChatAgentOption = AgentChatAgentOption.GEMINI_3_5_FLASH,
     val customTotalTokenLimit: Int? = null,
 )
@@ -91,22 +92,33 @@ class JsonAgentChatHistoryStore internal constructor(
 private data class StoredAgentChatHistory(
     val selectedAgentModelName: String = AgentChatAgentOption.GEMINI_3_5_FLASH.modelName,
     val customTotalTokenLimit: Int? = null,
+    val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val messages: List<StoredAgentChatMessage> = emptyList(),
 ) {
-    fun toSnapshot(): AgentChatHistorySnapshot =
-        AgentChatHistorySnapshot(
+    fun toSnapshot(): AgentChatHistorySnapshot {
+        val restoredMessages = messages.mapNotNull { it.toMessageOrNull() }
+        val restoredMemory =
+            if (memory.shortTerm.entries.isEmpty() && restoredMessages.isNotEmpty()) {
+                memory.withShortTermFromMessages(restoredMessages)
+            } else {
+                memory
+            }
+        return AgentChatHistorySnapshot(
             selectedAgent =
                 AgentChatAgentOption.entries.firstOrNull { it.modelName == selectedAgentModelName }
                     ?: AgentChatAgentOption.GEMINI_3_5_FLASH,
             customTotalTokenLimit = customTotalTokenLimit,
-            messages = messages.mapNotNull { it.toMessageOrNull() },
+            memory = restoredMemory,
+            messages = restoredMessages,
         )
+    }
 
     companion object {
         fun fromSnapshot(snapshot: AgentChatHistorySnapshot): StoredAgentChatHistory =
             StoredAgentChatHistory(
                 selectedAgentModelName = snapshot.selectedAgent.modelName,
                 customTotalTokenLimit = snapshot.customTotalTokenLimit,
+                memory = snapshot.memory.withShortTermFromMessages(snapshot.messages),
                 messages = snapshot.messages.filterNot { it.isLoading }.map(StoredAgentChatMessage::fromMessage),
             )
     }

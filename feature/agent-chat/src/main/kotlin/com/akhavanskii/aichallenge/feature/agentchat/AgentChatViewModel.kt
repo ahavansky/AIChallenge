@@ -38,6 +38,7 @@ class AgentChatViewModel
                     if (current == AgentChatUiState()) {
                         current.copy(
                             messages = snapshot.messages,
+                            memory = snapshot.memory.withShortTermFromMessages(snapshot.messages),
                             selectedAgent = snapshot.selectedAgent,
                             customTotalTokenLimit =
                                 snapshot.customTotalTokenLimit?.coerceAtMost(snapshot.selectedAgent.totalTokenLimit),
@@ -72,6 +73,7 @@ class AgentChatViewModel
                     it.copy(
                         input = "",
                         messages = emptyList(),
+                        memory = it.memory.clearTaskMemory(),
                         customTotalTokenLimit =
                             if (scenario.usesDemoBudget) {
                                 totalTokenLimit
@@ -131,6 +133,7 @@ class AgentChatViewModel
                     current.copy(
                         input = "",
                         messages = emptyList(),
+                        memory = current.memory.clearTaskMemory(),
                     )
                 }
             }
@@ -163,13 +166,27 @@ class AgentChatViewModel
                     text = "Waiting for ${currentState.selectedAgent.title}",
                     isLoading = true,
                 )
-            val requestMessages = currentState.messages.toAgentMessages() + AgentMessage.User(prompt)
+            val memoryForRequest = currentState.memory.recordUserInput(currentState.input)
+            val preparedPrompt =
+                AgentChatMemoryPromptBuilder.build(
+                    latestUserMessage = prompt,
+                    memory = memoryForRequest,
+                    selection =
+                        AgentChatMemorySelection(
+                            includeShortTerm = true,
+                            includeWorking = true,
+                            includeLongTerm = true,
+                        ),
+                )
             val updatedState =
                 mutableUiState.updateAndGet {
-                    it.copy(
-                        input = "",
-                        messages = currentState.messages + userMessage + loadingMessage,
-                    )
+                    val stateWithLoading =
+                        it.copy(
+                            input = "",
+                            messages = currentState.messages + userMessage + loadingMessage,
+                            memory = memoryForRequest.withLastRequest(preparedPrompt.requestContext),
+                        )
+                    stateWithLoading.withSyncedShortTermMemory()
                 }
             persistHistory(updatedState)
 
@@ -177,7 +194,7 @@ class AgentChatViewModel
                 when (
                     val result =
                         llmAgent.sendMessage(
-                            messages = requestMessages,
+                            messages = preparedPrompt.messages,
                             modelName = currentState.selectedAgent.modelName,
                             totalTokenLimit = currentState.effectiveTotalTokenLimit,
                         )
@@ -204,16 +221,18 @@ class AgentChatViewModel
             activeRequestJob = null
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages.replaceLastLoading(
-                                AgentChatMessage(
-                                    role = AgentChatRole.MODEL,
-                                    text = "Stopped by user.",
-                                    isError = true,
+                    val stoppedState =
+                        current.copy(
+                            messages =
+                                current.messages.replaceLastLoading(
+                                    AgentChatMessage(
+                                        role = AgentChatRole.MODEL,
+                                        text = "Stopped by user.",
+                                        isError = true,
+                                    ),
                                 ),
-                            ),
-                    )
+                        )
+                    stoppedState.withSyncedShortTermMemory()
                 }
             persistHistory(updatedState)
         }
@@ -225,17 +244,18 @@ class AgentChatViewModel
         ) {
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages.replaceLastLoading(
-                                AgentChatMessage(
-                                    role = AgentChatRole.MODEL,
-                                    text = text,
-                                    isError = isError,
-                                    tokenUsage = tokenUsage,
+                    current
+                        .copy(
+                            messages =
+                                current.messages.replaceLastLoading(
+                                    AgentChatMessage(
+                                        role = AgentChatRole.MODEL,
+                                        text = text,
+                                        isError = isError,
+                                        tokenUsage = tokenUsage,
+                                    ),
                                 ),
-                            ),
-                    )
+                        ).withSyncedShortTermMemory()
                 }
             persistHistory(updatedState)
         }
@@ -272,9 +292,13 @@ class AgentChatViewModel
         private fun AgentChatUiState.toHistorySnapshot(): AgentChatHistorySnapshot =
             AgentChatHistorySnapshot(
                 messages = messages.filterNot { it.isLoading },
+                memory = memory.withShortTermFromMessages(messages),
                 selectedAgent = selectedAgent,
                 customTotalTokenLimit = customTotalTokenLimit,
             )
+
+        private fun AgentChatUiState.withSyncedShortTermMemory(): AgentChatUiState =
+            copy(memory = memory.withShortTermFromMessages(messages))
 
         private fun List<AgentChatMessage>.toAgentMessages(): List<AgentMessage> {
             val agentMessages = mutableListOf<AgentMessage>()
@@ -338,7 +362,9 @@ class AgentChatViewModel
                 val requestMessages = mutableUiState.value.messages.toAgentMessages() + AgentMessage.User(userPrompt)
                 val updatedState =
                     mutableUiState.updateAndGet { current ->
-                        current.copy(messages = current.messages + userMessage + loadingMessage)
+                        current
+                            .copy(messages = current.messages + userMessage + loadingMessage)
+                            .withSyncedShortTermMemory()
                     }
                 persistHistory(updatedState)
 
@@ -382,15 +408,16 @@ class AgentChatViewModel
         private fun appendScenarioNotice(text: String) {
             val updatedState =
                 mutableUiState.updateAndGet { current ->
-                    current.copy(
-                        messages =
-                            current.messages +
-                                AgentChatMessage(
-                                    role = AgentChatRole.MODEL,
-                                    text = text,
-                                    isError = true,
-                                ),
-                    )
+                    current
+                        .copy(
+                            messages =
+                                current.messages +
+                                    AgentChatMessage(
+                                        role = AgentChatRole.MODEL,
+                                        text = text,
+                                        isError = true,
+                                    ),
+                        ).withSyncedShortTermMemory()
                 }
             persistHistory(updatedState)
         }
