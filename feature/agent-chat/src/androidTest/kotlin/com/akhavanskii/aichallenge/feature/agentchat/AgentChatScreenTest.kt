@@ -297,6 +297,45 @@ class AgentChatScreenTest {
     }
 
     @Test
+    fun profileComparisonResultsAreCollapsedAndExpandOnClick() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            compareResults =
+                                listOf(
+                                    AgentChatProfileCompareResult(
+                                        profileId = SENIOR_KOTLIN_PROFILE_ID,
+                                        profileTitle = "Senior Kotlin developer",
+                                        text =
+                                            """
+                                            1. Start with the system instruction.
+                                            2. Keep the same user prompt.
+                                            3. Compare tone and format.
+                                            4. Check whether constraints changed the answer.
+                                            5. Final detail appears after expansion.
+                                            """.trimIndent(),
+                                    ),
+                                ),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        val result = composeRule.onNodeWithTag("${AgentChatTags.PROFILE_COMPARE_RESULT_PREFIX}_$SENIOR_KOTLIN_PROFILE_ID")
+        result.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        composeRule.onNodeWithText("Start with the system instruction", substring = true).assertIsDisplayed()
+
+        result.performClick()
+
+        result.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        composeRule.onNodeWithText("Final detail appears after expansion", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun customTokenLimitCanBeChanged() {
         var state by
             mutableStateOf(

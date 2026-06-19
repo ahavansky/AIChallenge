@@ -78,6 +78,33 @@ class GeminiAgentTest {
         }
 
     @Test
+    fun sendMessageSerializesSystemInstructionOutsideContents() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        body = """{"candidates":[{"content":{"parts":[{"text":"Answer"}]}}]}""",
+                    )
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.sendMessage(
+                    prompt = "Hello",
+                    systemInstruction = "Answer for a senior Kotlin developer.",
+                    generationConfig = null,
+                )
+
+            assertEquals(GeminiResult.Success("Answer"), result)
+            val body = factory.lastRequest?.bodyString().orEmpty()
+            assertTrue(body.contains("\"systemInstruction\""))
+            assertTrue(body.contains("\"text\":\"Answer for a senior Kotlin developer.\""))
+            assertTrue(body.contains("\"contents\""))
+            assertTrue(body.contains("\"text\":\"Hello\""))
+        }
+
+    @Test
     fun sendMessageMapsTokenUsageForCurrentRequestHistoryAndModelResponse() =
         runTest {
             val factory =
@@ -187,6 +214,33 @@ class GeminiAgentTest {
             val body = factory.lastRequest?.bodyString().orEmpty()
             assertTrue(body.contains("\"text\":\"First question\""))
             assertTrue(body.contains("\"text\":\"First answer\""))
+            assertTrue(body.contains("\"text\":\"Follow-up\""))
+        }
+
+    @Test
+    fun countTokensIncludesSystemInstructionInGenerateContentRequest() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    jsonResponse(
+                        request = request,
+                        body = """{"totalTokens":52}""",
+                    )
+                }
+            val client = client(factory = factory, endpoint = GEMINI_GENERATE_CONTENT_ENDPOINT)
+
+            val result =
+                client.countTokens(
+                    messages = listOf(AgentMessage.User("Follow-up")),
+                    systemInstruction = "Use profile preferences.",
+                    modelName = "gemini-2.5-flash-lite",
+                )
+
+            assertEquals(GeminiResult.Success(52), result)
+            val body = factory.lastRequest?.bodyString().orEmpty()
+            assertTrue(body.contains("\"generateContentRequest\""))
+            assertTrue(body.contains("\"systemInstruction\""))
+            assertTrue(body.contains("\"text\":\"Use profile preferences.\""))
             assertTrue(body.contains("\"text\":\"Follow-up\""))
         }
 
@@ -301,6 +355,7 @@ class GeminiAgentTest {
                             AgentMessage.Model("Second answer"),
                             AgentMessage.User("Follow-up"),
                         ),
+                    systemInstruction = "Keep this profile visible.",
                     generationConfig = null,
                     totalTokenLimit = 20,
                 )
@@ -323,6 +378,7 @@ class GeminiAgentTest {
             val generateBody = factory.lastRequest?.bodyString().orEmpty()
             assertFalse(generateBody.contains("First question"))
             assertFalse(generateBody.contains("First answer"))
+            assertTrue(generateBody.contains("Keep this profile visible."))
             assertTrue(generateBody.contains("Second question"))
             assertTrue(generateBody.contains("Second answer"))
             assertTrue(generateBody.contains("Follow-up"))

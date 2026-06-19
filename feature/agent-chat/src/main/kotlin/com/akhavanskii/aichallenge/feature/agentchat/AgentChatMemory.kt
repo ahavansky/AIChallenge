@@ -170,6 +170,8 @@ data class AgentChatMemoryRequestContext(
     val chatHistoryMessageCount: Int = 0,
     val taskContextItemCount: Int = 0,
     val longTermMarkdownChars: Int = 0,
+    val systemInstructionChars: Int = 0,
+    val activeProfileTitle: String = "",
     @Transient val promptPreview: String = "",
 )
 
@@ -177,12 +179,14 @@ data class AgentChatMemoryRequestContext(
 enum class AgentChatMemoryLayer(
     val title: String,
 ) {
+    USER_PROFILE("User profile"),
     SHORT_TERM("Short-term"),
     TASK_CONTEXT("TaskContext"),
     LONG_TERM_MARKDOWN("Long-term markdown"),
 }
 
 data class AgentChatPreparedPrompt(
+    val systemInstruction: String? = null,
     val messages: List<AgentMessage>,
     val requestContext: AgentChatMemoryRequestContext,
 )
@@ -192,11 +196,16 @@ object AgentChatMemoryPromptBuilder {
         latestUserMessage: String,
         chatMessages: List<AgentChatMessage>,
         memory: AgentChatMemorySnapshot,
+        userProfile: AgentChatUserProfile? = null,
         selection: AgentChatMemorySelection = AgentChatMemorySelection(),
         budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
     ): AgentChatPreparedPrompt {
         val messages = mutableListOf<AgentMessage>()
         val includedLayers = mutableListOf<AgentChatMemoryLayer>()
+        val systemInstruction = userProfile?.let(AgentChatInstructionBuilder::buildSystemInstruction)
+        if (userProfile?.hasMeaningfulContent == true) {
+            includedLayers += AgentChatMemoryLayer.USER_PROFILE
+        }
 
         var longTermMarkdownChars = 0
         if (selection.includeLongTermMarkdown) {
@@ -228,6 +237,7 @@ object AgentChatMemoryPromptBuilder {
         messages += AgentMessage.User(latestUserMessage)
 
         return AgentChatPreparedPrompt(
+            systemInstruction = systemInstruction,
             messages = messages,
             requestContext =
                 AgentChatMemoryRequestContext(
@@ -237,7 +247,9 @@ object AgentChatMemoryPromptBuilder {
                     chatHistoryMessageCount = shortTermMessages.size,
                     taskContextItemCount = if (selection.includeTaskContext) memory.taskContext.itemCount else 0,
                     longTermMarkdownChars = longTermMarkdownChars,
-                    promptPreview = messages.toPromptPreview(),
+                    systemInstructionChars = systemInstruction?.length ?: 0,
+                    activeProfileTitle = userProfile?.title.orEmpty(),
+                    promptPreview = messages.toPromptPreview(systemInstruction = systemInstruction),
                 ),
         )
     }
@@ -269,32 +281,42 @@ fun List<AgentChatMessage>.toShortTermPromptMessages(maxMessages: Int = DEFAULT_
 
 fun AgentChatMemorySnapshot.formatDebugDetails(
     chatMessages: List<AgentChatMessage>,
+    activeProfile: AgentChatUserProfile,
     budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
 ): String =
     buildString {
-        val shortTermMessages = chatMessages.toShortTermPromptMessages(budget.chatHistoryMaxMessages)
-        appendLayerHeader("Short-term", shortTermMessages.size, "messages")
-        appendLine("- Source: chat history DB")
-        appendAgentMessages(shortTermMessages)
-
-        appendLayerHeader("Working", taskContext.itemCount, "items")
-        appendLine("- Source: TaskContext")
-        if (taskContext.itemCount == 0) {
-            appendLine("- Empty")
+        if (activeProfile.hasMeaningfulContent) {
+            appendLayerHeader("User profile", activeProfile.itemCount, "items")
+            appendLine("- Source: ${activeProfile.title}")
+            appendMemoryLine("Role", activeProfile.role)
+            appendMemoryLine("Expertise", activeProfile.expertiseLevel)
+            appendMemoryLines("Style", activeProfile.stylePreferences.take(1))
+            appendMemoryLines("Format", activeProfile.formatPreferences.take(1))
+            appendMemoryLines("Constraint", activeProfile.constraints.take(1))
         }
-        appendMemoryLine("Goal", taskContext.goal)
-        appendMemoryLine("Stage", taskContext.stage)
-        appendMemoryLines("Plan", taskContext.approvedPlan)
-        appendMemoryLines("Constraint", taskContext.constraints)
-        appendMemoryLines("Open question", taskContext.openQuestions)
-        appendMemoryLines("Result", taskContext.intermediateResults)
 
-        appendLayerHeader("Long-term", longTermMarkdown.meaningfulCharCount, "chars")
-        appendLine("- Source: ${longTermMarkdown.fileName}")
+        val shortTermMessages = chatMessages.toShortTermPromptMessages(budget.chatHistoryMaxMessages)
+        if (shortTermMessages.isNotEmpty()) {
+            appendLayerHeader("Short-term", shortTermMessages.size, "messages")
+            appendLine("- Source: chat history DB")
+            appendAgentMessages(shortTermMessages)
+        }
+
+        if (taskContext.itemCount > 0) {
+            appendLayerHeader("Working", taskContext.itemCount, "items")
+            appendLine("- Source: TaskContext")
+            appendMemoryLine("Goal", taskContext.goal)
+            appendMemoryLine("Stage", taskContext.stage)
+            appendMemoryLines("Plan", taskContext.approvedPlan)
+            appendMemoryLines("Constraint", taskContext.constraints)
+            appendMemoryLines("Open question", taskContext.openQuestions)
+            appendMemoryLines("Result", taskContext.intermediateResults)
+        }
+
         if (longTermMarkdown.hasMeaningfulContent) {
+            appendLayerHeader("Long-term", longTermMarkdown.meaningfulCharCount, "chars")
+            appendLine("- Source: ${longTermMarkdown.fileName}")
             appendMemoryLine("Markdown", longTermMarkdown.meaningfulMarkdown)
-        } else {
-            appendLine("- Empty")
         }
 
         lastRequest?.let { request ->
@@ -305,8 +327,13 @@ fun AgentChatMemorySnapshot.formatDebugDetails(
             appendLine("Prompt context: $layers")
             append(
                 "Counts: short=${request.chatHistoryMessageCount}, " +
-                    "task=${request.taskContextItemCount}, longChars=${request.longTermMarkdownChars}",
+                    "task=${request.taskContextItemCount}, longChars=${request.longTermMarkdownChars}, " +
+                    "systemChars=${request.systemInstructionChars}",
             )
+        }
+
+        if (isBlank()) {
+            append("Prompt context: latest user message only")
         }
     }.trim()
 
@@ -396,14 +423,23 @@ private fun List<String>.appendUnique(value: String): List<String> {
     return (this + cleaned).takeLast(MAX_MEMORY_ITEMS)
 }
 
-private fun List<AgentMessage>.toPromptPreview(): String =
-    joinToString(separator = "\n\n") { message ->
-        val role =
-            when (message) {
-                is AgentMessage.User -> "user"
-                is AgentMessage.Model -> "model"
-            }
-        "[$role]\n${message.text}"
+private fun List<AgentMessage>.toPromptPreview(systemInstruction: String?): String =
+    buildString {
+        systemInstruction?.let { instruction ->
+            appendLine("[system]")
+            appendLine(instruction)
+            appendLine()
+        }
+        append(
+            joinToString(separator = "\n\n") { message ->
+                val role =
+                    when (message) {
+                        is AgentMessage.User -> "user"
+                        is AgentMessage.Model -> "model"
+                    }
+                "[$role]\n${message.text}"
+            },
+        )
     }.take(MAX_PROMPT_PREVIEW_LENGTH)
 
 private fun String.takePromptChars(maxChars: Int): String = take(maxChars.coerceAtLeast(0))

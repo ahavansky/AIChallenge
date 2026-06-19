@@ -46,6 +46,12 @@ class AgentChatViewModelTest {
             assertEquals("", viewModel.uiState.value.input)
             assertFalse(viewModel.uiState.value.canSend)
             assertEquals(listOf(AgentMessage.User("Hello Gemini")), fakeAgent.calls.single().messages)
+            assertTrue(
+                fakeAgent.calls
+                    .single()
+                    .systemInstruction
+                    ?.contains("Senior Kotlin developer") == true,
+            )
             assertEquals(
                 listOf(
                     AgentChatMessage(role = AgentChatRole.USER, text = "Hello Gemini"),
@@ -504,10 +510,17 @@ class AgentChatViewModelTest {
             assertEquals(listOf("tests must stay offline"), memory.taskContext.constraints)
             assertEquals(
                 listOf(
+                    AgentChatMemoryLayer.USER_PROFILE,
                     AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
                     AgentChatMemoryLayer.TASK_CONTEXT,
                 ),
                 memory.lastRequest?.includedLayers,
+            )
+            assertTrue(
+                fakeAgent.calls
+                    .single()
+                    .systemInstruction
+                    ?.contains("Senior Kotlin developer") == true,
             )
             assertTrue(
                 (fakeAgent.calls.single().messages[0] as AgentMessage.User)
@@ -528,6 +541,106 @@ class AgentChatViewModelTest {
                     .last(),
             )
             assertEquals(memory.taskContext, historyStore.snapshot.memory.taskContext)
+        }
+
+    @Test
+    fun profileSelectionPersistsAndSubmitUsesActiveProfileSystemInstruction() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val profileStore = FakeAgentChatUserProfileStore()
+            val viewModel = createViewModel(fakeAgent = fakeAgent, userProfileStore = profileStore)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ProfileChanged(ANDROID_BEGINNER_PROFILE_ID))
+            runCurrent()
+            viewModel.onAction(AgentChatAction.InputChanged("Explain recomposition"))
+            viewModel.onAction(AgentChatAction.Submit)
+            runCurrent()
+
+            assertEquals(ANDROID_BEGINNER_PROFILE_ID, viewModel.uiState.value.activeProfileId)
+            assertEquals(ANDROID_BEGINNER_PROFILE_ID, profileStore.snapshot.activeProfileId)
+            assertTrue(
+                fakeAgent.calls
+                    .single()
+                    .systemInstruction
+                    ?.contains("Android beginner") == true,
+            )
+            assertTrue(
+                fakeAgent.calls
+                    .single()
+                    .systemInstruction
+                    ?.contains("Explain step by step") == true,
+            )
+            assertFalse(
+                fakeAgent.calls
+                    .single()
+                    .systemInstruction
+                    .orEmpty()
+                    .contains("Senior Kotlin developer"),
+            )
+        }
+
+    @Test
+    fun profileInputChangedPersistsEditedActiveProfile() =
+        runTest {
+            val profileStore = FakeAgentChatUserProfileStore()
+            val viewModel = createViewModel(userProfileStore = profileStore)
+            runCurrent()
+
+            viewModel.onAction(
+                AgentChatAction.ProfileInputChanged(
+                    """
+                    Title: Staff reviewer
+                    Role: Kotlin code reviewer
+                    Expertise: Staff
+                    Style: challenge weak assumptions
+                    Format: findings first
+                    Constraint: no generic repository layers
+                    """.trimIndent(),
+                ),
+            )
+            runCurrent()
+
+            assertEquals("Staff reviewer", viewModel.uiState.value.activeProfile.title)
+            assertEquals("Kotlin code reviewer", profileStore.snapshot.activeProfile.role)
+            assertTrue(
+                profileStore.snapshot.activeProfile.constraints
+                    .contains("no generic repository layers"),
+            )
+        }
+
+    @Test
+    fun compareProfilesSendsSamePromptWithDifferentSystemInstructions() =
+        runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Custom answer")),
+                                CompletableDeferred(GeminiResult.Success("Beginner answer")),
+                                CompletableDeferred(GeminiResult.Success("Senior answer")),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Explain memory"))
+            viewModel.onAction(AgentChatAction.CompareProfiles)
+            runCurrent()
+
+            assertEquals(3, fakeAgent.calls.size)
+            assertTrue(fakeAgent.calls.all { it.messages.last() == AgentMessage.User("Explain memory") })
+            assertTrue(fakeAgent.calls[0].systemInstruction?.contains("Custom user") == true)
+            assertTrue(fakeAgent.calls[1].systemInstruction?.contains("Android beginner") == true)
+            assertTrue(fakeAgent.calls[2].systemInstruction?.contains("Senior Kotlin developer") == true)
+            assertEquals(
+                listOf("Custom answer", "Beginner answer", "Senior answer"),
+                viewModel.uiState.value.compareResults
+                    .map { it.text },
+            )
+            assertEquals(emptyList<AgentChatMessage>(), viewModel.uiState.value.messages)
         }
 
     @Test
@@ -771,7 +884,8 @@ class AgentChatViewModelTest {
         fakeAgent: FakeLlmAgent = FakeLlmAgent(),
         historyStore: AgentChatHistoryStore = FakeAgentChatHistoryStore(),
         longTermMemoryStore: AgentChatLongTermMemoryStore = FakeAgentChatLongTermMemoryStore(),
-    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore, longTermMemoryStore)
+        userProfileStore: AgentChatUserProfileStore = FakeAgentChatUserProfileStore(),
+    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore, longTermMemoryStore, userProfileStore)
 
     private fun completedResult(
         text: String,
@@ -801,6 +915,7 @@ class AgentChatViewModelTest {
 
         override suspend fun sendMessage(
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
             totalTokenLimit: Int?,
@@ -808,6 +923,7 @@ class AgentChatViewModelTest {
             calls +=
                 AgentCall(
                     messages = messages,
+                    systemInstruction = systemInstruction,
                     generationConfig = generationConfig,
                     modelName = modelName,
                     totalTokenLimit = totalTokenLimit,
@@ -824,6 +940,7 @@ class AgentChatViewModelTest {
 
     private data class AgentCall(
         val messages: List<AgentMessage>,
+        val systemInstruction: String?,
         val generationConfig: GeminiGenerationConfig?,
         val modelName: String?,
         val totalTokenLimit: Int?,
@@ -852,6 +969,19 @@ class AgentChatViewModelTest {
 
         override suspend fun save(memory: AgentChatLongTermMarkdown) {
             this.memory = memory
+        }
+    }
+
+    private class FakeAgentChatUserProfileStore(
+        initialSnapshot: AgentChatProfileSnapshot = AgentChatProfileSnapshot(),
+    ) : AgentChatUserProfileStore {
+        var snapshot = initialSnapshot.normalized
+            private set
+
+        override suspend fun load(): AgentChatProfileSnapshot = snapshot
+
+        override suspend fun save(snapshot: AgentChatProfileSnapshot) {
+            this.snapshot = snapshot.normalized
         }
     }
 }

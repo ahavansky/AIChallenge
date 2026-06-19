@@ -9,6 +9,10 @@ data class AgentChatUiState(
     val messages: List<AgentChatMessage> = emptyList(),
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val taskContextInput: String = AgentChatTaskContext().toEditableText(),
+    val profiles: List<AgentChatUserProfile> = AgentChatProfileCatalog.defaults,
+    val activeProfileId: String = SENIOR_KOTLIN_PROFILE_ID,
+    val profileInput: String = AgentChatProfileCatalog.defaults.first { it.id == SENIOR_KOTLIN_PROFILE_ID }.toEditableText(),
+    val compareResults: List<AgentChatProfileCompareResult> = emptyList(),
     val isLongTermMemoryDirty: Boolean = false,
     val selectedAgent: AgentChatAgentOption = AgentChatAgentOption.GEMINI_3_5_FLASH,
     val customTotalTokenLimit: Int? = null,
@@ -34,7 +38,7 @@ data class AgentChatUiState(
         get() = latestTokenUsage?.totalTokens?.let { it >= effectiveTotalTokenLimit } ?: false
 
     val isLoading: Boolean
-        get() = messages.any { it.isLoading }
+        get() = messages.any { it.isLoading } || compareResults.any { it.isLoading }
 
     val isAgentLocked: Boolean
         get() = messages.any { it.role == AgentChatRole.USER }
@@ -44,6 +48,9 @@ data class AgentChatUiState(
 
     val canSend: Boolean
         get() = input.isNotBlank() && !isLoading
+
+    val canCompareProfiles: Boolean
+        get() = input.isNotBlank() && !isLoading && profiles.size >= 2
 
     val canClear: Boolean
         get() = messages.isNotEmpty() && !isLoading
@@ -56,7 +63,20 @@ data class AgentChatUiState(
 
     val canClearTaskContext: Boolean
         get() = memory.taskContext.itemCount > 0 && !isLoading
+
+    val activeProfile: AgentChatUserProfile
+        get() =
+            profiles.firstOrNull { it.id == activeProfileId }
+                ?: AgentChatProfileCatalog.defaults.first { it.id == SENIOR_KOTLIN_PROFILE_ID }
 }
+
+data class AgentChatProfileCompareResult(
+    val profileId: String,
+    val profileTitle: String,
+    val text: String,
+    val isLoading: Boolean = false,
+    val isError: Boolean = false,
+)
 
 data class AgentChatMessage(
     val role: AgentChatRole,
@@ -153,11 +173,21 @@ sealed interface AgentChatAction : UiEvent {
         val markdown: String,
     ) : AgentChatAction
 
+    data class ProfileChanged(
+        val profileId: String,
+    ) : AgentChatAction
+
+    data class ProfileInputChanged(
+        val input: String,
+    ) : AgentChatAction
+
     data class ScenarioSelected(
         val scenario: AgentChatScenario,
     ) : AgentChatAction
 
     data object Submit : AgentChatAction
+
+    data object CompareProfiles : AgentChatAction
 
     data object ClearChat : AgentChatAction
 

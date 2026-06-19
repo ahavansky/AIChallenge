@@ -385,9 +385,15 @@ class ContextAgentViewModelTest {
 
         override suspend fun countTokens(
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             modelName: String?,
         ): AgentResult<Int> {
-            tokenCountCalls += TokenCountCall(messages = messages, modelName = modelName)
+            tokenCountCalls +=
+                TokenCountCall(
+                    messages = messages,
+                    systemInstruction = systemInstruction,
+                    modelName = modelName,
+                )
             return if (tokenCountResults.size > 1) {
                 tokenCountResults.removeFirst()
             } else {
@@ -397,6 +403,7 @@ class ContextAgentViewModelTest {
 
         override suspend fun sendMessage(
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
             totalTokenLimit: Int?,
@@ -404,6 +411,7 @@ class ContextAgentViewModelTest {
             calls +=
                 AgentCall(
                     messages = messages,
+                    systemInstruction = systemInstruction,
                     generationConfig = generationConfig,
                     modelName = modelName,
                     totalTokenLimit = totalTokenLimit,
@@ -418,6 +426,7 @@ class ContextAgentViewModelTest {
 
     private data class AgentCall(
         val messages: List<AgentMessage>,
+        val systemInstruction: String?,
         val generationConfig: GeminiGenerationConfig?,
         val modelName: String?,
         val totalTokenLimit: Int?,
@@ -425,6 +434,7 @@ class ContextAgentViewModelTest {
 
     private data class TokenCountCall(
         val messages: List<AgentMessage>,
+        val systemInstruction: String?,
         val modelName: String?,
     )
 

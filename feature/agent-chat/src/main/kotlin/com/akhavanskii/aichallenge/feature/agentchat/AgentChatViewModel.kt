@@ -26,6 +26,7 @@ class AgentChatViewModel
         private val llmAgent: LlmAgent,
         private val historyStore: AgentChatHistoryStore,
         private val longTermMemoryStore: AgentChatLongTermMemoryStore,
+        private val userProfileStore: AgentChatUserProfileStore,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
@@ -36,13 +37,18 @@ class AgentChatViewModel
             viewModelScope.launch {
                 val snapshot = historyStore.load()
                 val longTermMemory = longTermMemoryStore.load()
+                val profileSnapshot = userProfileStore.load()
                 mutableUiState.update { current ->
                     if (current == AgentChatUiState()) {
                         val memory = snapshot.memory.withLongTermMarkdown(longTermMemory)
+                        val profiles = profileSnapshot.normalized
                         current.copy(
                             messages = snapshot.messages,
                             memory = memory,
                             taskContextInput = memory.taskContext.toEditableText(),
+                            profiles = profiles.profiles,
+                            activeProfileId = profiles.activeProfileId,
+                            profileInput = profiles.activeProfile.toEditableText(),
                             isLongTermMemoryDirty = false,
                             selectedAgent = snapshot.selectedAgent,
                             customTotalTokenLimit =
@@ -60,11 +66,14 @@ class AgentChatViewModel
                 is AgentChatAction.AgentChanged -> onAgentChanged(action.agent)
                 is AgentChatAction.InputChanged -> onInputChanged(action.input)
                 is AgentChatAction.LongTermMemoryChanged -> onLongTermMemoryChanged(action.markdown)
+                is AgentChatAction.ProfileChanged -> onProfileChanged(action.profileId)
+                is AgentChatAction.ProfileInputChanged -> onProfileInputChanged(action.input)
                 is AgentChatAction.ScenarioSelected -> onScenarioSelected(action.scenario)
                 is AgentChatAction.TaskContextChanged -> onTaskContextChanged(action.input)
                 is AgentChatAction.TokenLimitChanged -> onTokenLimitChanged(action.input)
                 AgentChatAction.ClearChat -> clearChat()
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
+                AgentChatAction.CompareProfiles -> compareProfiles()
                 AgentChatAction.SaveLongTermMemory -> saveLongTermMemory()
                 AgentChatAction.Stop -> stopActiveRequest()
                 AgentChatAction.Submit -> submit()
@@ -84,6 +93,7 @@ class AgentChatViewModel
                         messages = emptyList(),
                         memory = it.memory.clearTaskContext(),
                         taskContextInput = AgentChatTaskContext().toEditableText(),
+                        compareResults = emptyList(),
                         customTotalTokenLimit =
                             if (scenario.usesDemoBudget) {
                                 totalTokenLimit
@@ -99,6 +109,7 @@ class AgentChatViewModel
                     requestId = requestId,
                     scenario = scenario,
                     selectedAgent = selectedAgent,
+                    activeProfile = current.activeProfile,
                     totalTokenLimit = totalTokenLimit,
                 )
             }
@@ -164,6 +175,49 @@ class AgentChatViewModel
             }
         }
 
+        private fun onProfileChanged(profileId: String) {
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    if (current.isLoading) {
+                        current
+                    } else {
+                        val snapshot = current.toProfileSnapshot().withActiveProfile(profileId)
+                        current.copy(
+                            profiles = snapshot.profiles,
+                            activeProfileId = snapshot.activeProfileId,
+                            profileInput = snapshot.activeProfile.toEditableText(),
+                            compareResults = emptyList(),
+                        )
+                    }
+                }
+            persistProfiles(updatedState)
+        }
+
+        private fun onProfileInputChanged(input: String) {
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    if (current.isLoading) {
+                        current
+                    } else {
+                        val activeProfile = current.activeProfile
+                        val updatedProfile =
+                            AgentChatUserProfile.fromEditableText(
+                                id = activeProfile.id,
+                                fallbackTitle = activeProfile.title,
+                                text = input,
+                            )
+                        val snapshot = current.toProfileSnapshot().withUpdatedActiveProfile(updatedProfile)
+                        current.copy(
+                            profiles = snapshot.profiles,
+                            activeProfileId = snapshot.activeProfileId,
+                            profileInput = input,
+                            compareResults = emptyList(),
+                        )
+                    }
+                }
+            persistProfiles(updatedState)
+        }
+
         private fun saveLongTermMemory() {
             val memoryToSave = mutableUiState.value.memory.longTermMarkdown
             viewModelScope.launch {
@@ -187,6 +241,7 @@ class AgentChatViewModel
                         input = "",
                         messages = emptyList(),
                         memory = current.memory.copy(lastRequest = null),
+                        compareResults = emptyList(),
                     )
                 }
             }
@@ -238,6 +293,7 @@ class AgentChatViewModel
                     latestUserMessage = prompt,
                     chatMessages = currentState.messages,
                     memory = currentState.memory,
+                    userProfile = currentState.activeProfile,
                     selection =
                         AgentChatMemorySelection(
                             includeChatHistory = true,
@@ -251,6 +307,7 @@ class AgentChatViewModel
                         input = "",
                         messages = currentState.messages + userMessage + loadingMessage,
                         memory = currentState.memory.withLastRequest(preparedPrompt.requestContext),
+                        compareResults = emptyList(),
                     )
                 }
             persistHistory(updatedState)
@@ -260,6 +317,7 @@ class AgentChatViewModel
                     val result =
                         llmAgent.sendMessage(
                             messages = preparedPrompt.messages,
+                            systemInstruction = preparedPrompt.systemInstruction,
                             modelName = currentState.selectedAgent.modelName,
                             totalTokenLimit = currentState.effectiveTotalTokenLimit,
                         )
@@ -273,6 +331,71 @@ class AgentChatViewModel
                         if (isCurrentRequest(requestId)) {
                             replaceLoadingMessage(result.error.userMessage, isError = true)
                         }
+                    }
+                }
+            }
+        }
+
+        private fun compareProfiles() {
+            val currentState = mutableUiState.value
+            if (!currentState.canCompareProfiles) return
+
+            val prompt = currentState.input.normalizedPromptOrNull() ?: return
+            val profiles = currentState.profiles.take(PROFILE_COMPARE_LIMIT)
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(
+                        input = "",
+                        compareResults =
+                            profiles.map { profile ->
+                                AgentChatProfileCompareResult(
+                                    profileId = profile.id,
+                                    profileTitle = profile.title,
+                                    text = "Waiting for ${current.selectedAgent.title}",
+                                    isLoading = true,
+                                )
+                            },
+                    )
+                }
+
+            launchActiveRequest { requestId ->
+                profiles.forEach { profile ->
+                    if (!isCurrentRequest(requestId)) return@launchActiveRequest
+
+                    val preparedPrompt =
+                        AgentChatMemoryPromptBuilder.build(
+                            latestUserMessage = prompt,
+                            chatMessages = updatedState.messages,
+                            memory = updatedState.memory,
+                            userProfile = profile,
+                            selection =
+                                AgentChatMemorySelection(
+                                    includeChatHistory = true,
+                                    includeTaskContext = true,
+                                    includeLongTermMarkdown = true,
+                                ),
+                        )
+                    val result =
+                        llmAgent.sendMessage(
+                            messages = preparedPrompt.messages,
+                            systemInstruction = preparedPrompt.systemInstruction,
+                            modelName = updatedState.selectedAgent.modelName,
+                            totalTokenLimit = updatedState.effectiveTotalTokenLimit,
+                        )
+                    if (!isCurrentRequest(requestId)) return@launchActiveRequest
+
+                    when (result) {
+                        is GeminiResult.Success ->
+                            replaceCompareResult(
+                                profileId = profile.id,
+                                text = result.value,
+                            )
+                        is GeminiResult.Failure ->
+                            replaceCompareResult(
+                                profileId = profile.id,
+                                text = result.error.userMessage,
+                                isError = true,
+                            )
                     }
                 }
             }
@@ -296,10 +419,37 @@ class AgentChatViewModel
                                         isError = true,
                                     ),
                                 ),
+                            compareResults =
+                                current.compareResults.map { result ->
+                                    if (result.isLoading) {
+                                        result.copy(text = "Stopped by user.", isLoading = false, isError = true)
+                                    } else {
+                                        result
+                                    }
+                                },
                         )
                     stoppedState
                 }
             persistHistory(updatedState)
+        }
+
+        private fun replaceCompareResult(
+            profileId: String,
+            text: String,
+            isError: Boolean = false,
+        ) {
+            mutableUiState.update { current ->
+                current.copy(
+                    compareResults =
+                        current.compareResults.map { result ->
+                            if (result.profileId == profileId) {
+                                result.copy(text = text, isLoading = false, isError = isError)
+                            } else {
+                                result
+                            }
+                        },
+                )
+            }
         }
 
         private fun replaceLoadingMessage(
@@ -336,6 +486,12 @@ class AgentChatViewModel
             }
         }
 
+        private fun persistProfiles(state: AgentChatUiState) {
+            viewModelScope.launch {
+                userProfileStore.save(state.toProfileSnapshot())
+            }
+        }
+
         private fun launchActiveRequest(block: suspend (Long) -> Unit) {
             val requestId = activeRequestId + 1
             activeRequestId = requestId
@@ -361,6 +517,12 @@ class AgentChatViewModel
                 selectedAgent = selectedAgent,
                 customTotalTokenLimit = customTotalTokenLimit,
             )
+
+        private fun AgentChatUiState.toProfileSnapshot(): AgentChatProfileSnapshot =
+            AgentChatProfileSnapshot(
+                activeProfileId = activeProfileId,
+                profiles = profiles,
+            ).normalized
 
         private fun List<AgentChatMessage>.toAgentMessages(): List<AgentMessage> {
             val agentMessages = mutableListOf<AgentMessage>()
@@ -407,9 +569,11 @@ class AgentChatViewModel
             requestId: Long,
             scenario: AgentChatScenario,
             selectedAgent: AgentChatAgentOption,
+            activeProfile: AgentChatUserProfile,
             totalTokenLimit: Int,
         ) {
             var overflowNoticeShown = false
+            val systemInstruction = AgentChatInstructionBuilder.buildSystemInstruction(activeProfile)
             scenario.prompts(totalTokenLimit).forEachIndexed { index, prompt ->
                 if (!isCurrentRequest(requestId)) return
 
@@ -433,6 +597,7 @@ class AgentChatViewModel
                     val result =
                         llmAgent.sendMessage(
                             messages = requestMessages,
+                            systemInstruction = systemInstruction,
                             generationConfig = SCENARIO_GENERATION_CONFIG,
                             modelName = selectedAgent.modelName,
                             totalTokenLimit = scenario.agentTokenLimit(totalTokenLimit),
@@ -494,6 +659,7 @@ class AgentChatViewModel
             const val MIN_CUSTOM_TOKEN_LIMIT = 1
             const val OVERFLOW_SCENARIO_TOTAL_LIMIT = 1_500
             const val SCENARIO_MAX_OUTPUT_TOKENS = 160
+            const val PROFILE_COMPARE_LIMIT = 3
             val SCENARIO_GENERATION_CONFIG = GeminiGenerationConfig(maxOutputTokens = SCENARIO_MAX_OUTPUT_TOKENS)
         }
     }

@@ -28,6 +28,7 @@ class GeminiAgent
     ) : LlmAgent {
         override suspend fun countTokens(
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             modelName: String?,
         ): AgentResult<Int> {
             val normalizedMessages = messages.normalized()
@@ -49,6 +50,7 @@ class GeminiAgent
                             requestId = requestId,
                             requestEndpoint = requestEndpoint,
                             messages = normalizedMessages,
+                            systemInstruction = systemInstruction.normalizedSystemInstructionOrNull(),
                         )
                     tokenCount
                         ?.let { GeminiResult.Success(it) }
@@ -74,11 +76,13 @@ class GeminiAgent
 
         override suspend fun sendMessage(
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
             totalTokenLimit: Int?,
         ): AgentResult<String> {
             val normalizedMessages = messages.normalized()
+            val normalizedSystemInstruction = systemInstruction.normalizedSystemInstructionOrNull()
             val latestUserMessage = normalizedMessages.lastOrNull() as? AgentMessage.User
             if (latestUserMessage == null) {
                 Timber.tag(LOG_TAG).w("Gemini request skipped: empty prompt.")
@@ -91,31 +95,40 @@ class GeminiAgent
 
             val requestId = REQUEST_IDS.incrementAndGet()
             return withContext(dispatcher) {
-                runCatching { executeRequest(requestId, normalizedMessages, generationConfig, modelName, totalTokenLimit) }
-                    .getOrElse { throwable ->
-                        Timber
-                            .tag(LOG_TAG)
-                            .e(
-                                throwable,
-                                "Gemini request #%d failed before a parsed result. configured=%s messages=%d latestPromptChars=%d",
-                                requestId,
-                                generationConfig != null,
-                                normalizedMessages.size,
-                                latestUserMessage.text.length,
-                            )
-                        when (throwable) {
-                            is CancellationException -> throw throwable
-                            is IOException -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
-                            is SerializationException -> GeminiResult.Failure(GeminiNetworkError.Serialization(throwable.message))
-                            else -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
-                        }
+                runCatching {
+                    executeRequest(
+                        requestId = requestId,
+                        messages = normalizedMessages,
+                        systemInstruction = normalizedSystemInstruction,
+                        generationConfig = generationConfig,
+                        modelName = modelName,
+                        totalTokenLimit = totalTokenLimit,
+                    )
+                }.getOrElse { throwable ->
+                    Timber
+                        .tag(LOG_TAG)
+                        .e(
+                            throwable,
+                            "Gemini request #%d failed before a parsed result. configured=%s messages=%d latestPromptChars=%d",
+                            requestId,
+                            generationConfig != null,
+                            normalizedMessages.size,
+                            latestUserMessage.text.length,
+                        )
+                    when (throwable) {
+                        is CancellationException -> throw throwable
+                        is IOException -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
+                        is SerializationException -> GeminiResult.Failure(GeminiNetworkError.Serialization(throwable.message))
+                        else -> GeminiResult.Failure(GeminiNetworkError.Network(throwable.message))
                     }
+                }
             }
         }
 
         private suspend fun executeRequest(
             requestId: Long,
             messages: List<AgentMessage>,
+            systemInstruction: String?,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
             totalTokenLimit: Int?,
@@ -128,6 +141,7 @@ class GeminiAgent
                         requestId = requestId,
                         requestEndpoint = requestEndpoint,
                         messages = listOf(message),
+                        systemInstruction = null,
                     )
                 }
             val tokenLimit = totalTokenLimit?.takeIf { it > 0 }
@@ -135,6 +149,7 @@ class GeminiAgent
                 messages.toSlidingTokenWindow(
                     requestId = requestId,
                     requestEndpoint = requestEndpoint,
+                    systemInstruction = systemInstruction,
                     totalTokenLimit = tokenLimit,
                 )
             val tokenWindowOutputBudget =
@@ -152,6 +167,7 @@ class GeminiAgent
                 json.encodeToString(
                     GenerateContentRequest.fromMessages(
                         messages = tokenWindow.messages,
+                        systemInstruction = systemInstruction,
                         generationConfig = effectiveGenerationConfig?.toDto(json),
                     ),
                 )
@@ -257,6 +273,7 @@ class GeminiAgent
             requestId: Long,
             requestEndpoint: String,
             messages: List<AgentMessage>,
+            systemInstruction: String?,
         ): Int? =
             runCatching {
                 val countTokensEndpoint =
@@ -270,7 +287,13 @@ class GeminiAgent
                                     requestEndpoint,
                                 )
                         }
-                val requestJson = json.encodeToString(CountTokensRequest.fromMessages(messages))
+                val requestJson =
+                    json.encodeToString(
+                        CountTokensRequest.fromMessages(
+                            messages = messages,
+                            systemInstruction = systemInstruction,
+                        ),
+                    )
                 val request =
                     Request
                         .Builder()
@@ -315,6 +338,7 @@ class GeminiAgent
         private fun List<AgentMessage>.toSlidingTokenWindow(
             requestId: Long,
             requestEndpoint: String,
+            systemInstruction: String?,
             totalTokenLimit: Int?,
         ): SlidingTokenWindow {
             if (totalTokenLimit == null) {
@@ -327,6 +351,7 @@ class GeminiAgent
                     requestId = requestId,
                     requestEndpoint = requestEndpoint,
                     messages = candidate,
+                    systemInstruction = systemInstruction,
                 )
             if (promptTokens == null || promptTokens <= totalTokenLimit) {
                 return SlidingTokenWindow(messages = candidate, promptTokens = promptTokens, isTrimmed = false)
@@ -343,6 +368,7 @@ class GeminiAgent
                         requestId = requestId,
                         requestEndpoint = requestEndpoint,
                         messages = candidate,
+                        systemInstruction = systemInstruction,
                     )
             }
 
@@ -390,6 +416,8 @@ class GeminiAgent
                     }
                 }
             }
+
+        private fun String?.normalizedSystemInstructionOrNull(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 
         private fun GeminiGenerationConfig.withoutUnsupportedFields(
             requestId: Long,

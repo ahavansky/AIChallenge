@@ -50,6 +50,7 @@ import com.akhavanskii.aichallenge.core.designsystem.ChallengeMarkdownText
 import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AgentChatScreen(
     state: AgentChatUiState,
@@ -119,23 +120,35 @@ fun AgentChatScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            ConversationHistory(
+                messages = state.messages,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            ProfileCompareResults(
+                results = state.compareResults,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             MemoryLayersSummary(
                 messages = state.messages,
                 memory = state.memory,
+                activeProfile = state.activeProfile,
+                profiles = state.profiles,
+                profileInput = state.profileInput,
                 taskContextInput = state.taskContextInput,
                 isLongTermMemoryDirty = state.isLongTermMemoryDirty,
                 enabled = !state.isLoading,
+                canCompareProfiles = state.canCompareProfiles,
                 canSaveLongTermMemory = state.canSaveLongTermMemory,
                 canClearTaskContext = state.canClearTaskContext,
+                onProfileSelected = { onAction(AgentChatAction.ProfileChanged(it)) },
+                onProfileInputChanged = { onAction(AgentChatAction.ProfileInputChanged(it)) },
+                onCompareProfiles = { onAction(AgentChatAction.CompareProfiles) },
                 onTaskContextChanged = { onAction(AgentChatAction.TaskContextChanged(it)) },
                 onLongTermMemoryChanged = { onAction(AgentChatAction.LongTermMemoryChanged(it)) },
                 onSaveLongTermMemory = { onAction(AgentChatAction.SaveLongTermMemory) },
                 onClearTaskContext = { onAction(AgentChatAction.ClearTaskContext) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            ConversationHistory(
-                messages = state.messages,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -147,7 +160,7 @@ fun AgentChatScreen(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 68.dp)
+                    .heightIn(min = 68.dp, max = 112.dp)
                     .testTag(AgentChatTags.INPUT),
             label = { Text("Message") },
             placeholder = { Text("Ask a follow-up.") },
@@ -160,10 +173,10 @@ fun AgentChatScreen(
                 ),
         )
 
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             ChallengeButton(
                 onClick = { onAction(AgentChatAction.Submit) },
@@ -195,17 +208,25 @@ fun AgentChatScreen(
 private fun MemoryLayersSummary(
     messages: List<AgentChatMessage>,
     memory: AgentChatMemorySnapshot,
+    activeProfile: AgentChatUserProfile,
+    profiles: List<AgentChatUserProfile>,
+    profileInput: String,
     taskContextInput: String,
     isLongTermMemoryDirty: Boolean,
     enabled: Boolean,
+    canCompareProfiles: Boolean,
     canSaveLongTermMemory: Boolean,
     canClearTaskContext: Boolean,
+    onProfileSelected: (String) -> Unit,
+    onProfileInputChanged: (String) -> Unit,
+    onCompareProfiles: () -> Unit,
     onTaskContextChanged: (String) -> Unit,
     onLongTermMemoryChanged: (String) -> Unit,
     onSaveLongTermMemory: () -> Unit,
     onClearTaskContext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isProfileEditorVisible by remember { mutableStateOf(false) }
     var isTaskContextEditorVisible by remember { mutableStateOf(false) }
     var isLongTermMemoryEditorVisible by remember { mutableStateOf(false) }
 
@@ -230,16 +251,31 @@ private fun MemoryLayersSummary(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Text(
-                text = memory.formatDebugDetails(messages),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                ProfileMenu(
+                    profiles = profiles,
+                    activeProfile = activeProfile,
+                    enabled = enabled,
+                    onSelected = onProfileSelected,
+                )
+                TextButton(
+                    onClick = { isProfileEditorVisible = !isProfileEditorVisible },
+                    enabled = enabled,
+                    modifier = Modifier.testTag(AgentChatTags.PROFILE_EDITOR_TOGGLE),
+                ) {
+                    Text(if (isProfileEditorVisible) "Hide profile" else "Edit profile")
+                }
+                TextButton(
+                    onClick = onCompareProfiles,
+                    enabled = canCompareProfiles,
+                    modifier = Modifier.testTag(AgentChatTags.COMPARE_PROFILES_BUTTON),
+                ) {
+                    Text("Compare profiles")
+                }
                 TextButton(
                     onClick = { isTaskContextEditorVisible = !isTaskContextEditorVisible },
                     enabled = enabled,
@@ -254,6 +290,32 @@ private fun MemoryLayersSummary(
                 ) {
                     Text(if (isLongTermMemoryEditorVisible) "Hide memory.md" else "Edit memory.md")
                 }
+            }
+            Text(
+                text = memory.formatDebugDetails(messages, activeProfile = activeProfile),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isProfileEditorVisible) {
+                OutlinedTextField(
+                    value = profileInput,
+                    onValueChange = onProfileInputChanged,
+                    enabled = enabled,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 120.dp)
+                            .testTag(AgentChatTags.PROFILE_INPUT),
+                    label = { Text("User profile", style = MaterialTheme.typography.labelSmall) },
+                    minLines = 5,
+                    maxLines = PROFILE_MAX_LINES,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    shape = RoundedCornerShape(8.dp),
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                )
             }
             if (isTaskContextEditorVisible) {
                 OutlinedTextField(
@@ -327,6 +389,141 @@ private fun MemoryLayersSummary(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileMenu(
+    profiles: List<AgentChatUserProfile>,
+    activeProfile: AgentChatUserProfile,
+    enabled: Boolean,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    TextButton(
+        onClick = { expanded = true },
+        enabled = enabled,
+        modifier = modifier.testTag(AgentChatTags.PROFILE_MENU_BUTTON),
+    ) {
+        Text(
+            text = activeProfile.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+    ) {
+        profiles.forEach { profile ->
+            DropdownMenuItem(
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(profile.title, style = MaterialTheme.typography.bodyMedium)
+                        if (profile.role.isNotBlank()) {
+                            Text(
+                                text = profile.role,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                },
+                onClick = {
+                    expanded = false
+                    onSelected(profile.id)
+                },
+                modifier = Modifier.testTag("${AgentChatTags.PROFILE_PREFIX}_${profile.id}"),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ProfileCompareResults(
+    results: List<AgentChatProfileCompareResult>,
+    modifier: Modifier = Modifier,
+) {
+    if (results.isEmpty()) return
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.PROFILE_COMPARE_RESULTS),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Profile comparison",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                results.forEach { result ->
+                    var expanded by remember(result.profileId, result.text) { mutableStateOf(false) }
+                    Surface(
+                        modifier =
+                            Modifier
+                                .width(260.dp)
+                                .clickable { expanded = !expanded }
+                                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                                .testTag("${AgentChatTags.PROFILE_COMPARE_RESULT_PREFIX}_${result.profileId}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color =
+                            if (result.isError) {
+                                MaterialTheme.colorScheme.errorContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = result.profileTitle,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            val bodyColor =
+                                if (result.isError) {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            if (expanded) {
+                                ChallengeMarkdownBody(
+                                    body = result.text,
+                                    color = bodyColor,
+                                )
+                            } else {
+                                ChallengeMarkdownText(
+                                    text = result.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = bodyColor,
+                                    maxLines = COLLAPSED_PROFILE_COMPARE_LINES,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -566,12 +763,19 @@ object AgentChatTags {
     const val SEND_BUTTON = "agent_chat_send_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
+    const val COMPARE_PROFILES_BUTTON = "agent_chat_compare_profiles_button"
     const val HISTORY = "agent_chat_history"
     const val MESSAGE = "agent_chat_message"
     const val TOKEN_USAGE = "agent_chat_token_usage"
     const val TOKEN_LIMIT_INPUT = "agent_chat_token_limit_input"
     const val TOKEN_SCENARIOS = "agent_chat_token_scenarios"
     const val MEMORY_LAYERS = "agent_chat_memory_layers"
+    const val PROFILE_MENU_BUTTON = "agent_chat_profile_menu_button"
+    const val PROFILE_PREFIX = "agent_chat_profile"
+    const val PROFILE_EDITOR_TOGGLE = "agent_chat_profile_editor_toggle"
+    const val PROFILE_INPUT = "agent_chat_profile_input"
+    const val PROFILE_COMPARE_RESULTS = "agent_chat_profile_compare_results"
+    const val PROFILE_COMPARE_RESULT_PREFIX = "agent_chat_profile_compare_result"
     const val TASK_CONTEXT_EDITOR_TOGGLE = "agent_chat_task_context_editor_toggle"
     const val TASK_CONTEXT_INPUT = "agent_chat_task_context_input"
     const val CLEAR_TASK_CONTEXT_BUTTON = "agent_chat_clear_task_context_button"
@@ -607,8 +811,10 @@ private fun String.shouldCollapse(): Boolean =
     lineSequence().count() > COLLAPSED_MESSAGE_BODY_LINES || length > COLLAPSED_MESSAGE_CHAR_LIMIT
 
 private const val COLLAPSED_MESSAGE_BODY_LINES = 4
+private const val COLLAPSED_PROFILE_COMPARE_LINES = 3
 private const val COLLAPSED_MESSAGE_CHAR_LIMIT = 220
-private const val INPUT_MAX_LINES = 5
+private const val INPUT_MAX_LINES = 3
+private const val PROFILE_MAX_LINES = 8
 private const val TASK_CONTEXT_MAX_LINES = 8
 private const val LONG_TERM_MEMORY_MAX_LINES = 10
 

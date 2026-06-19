@@ -11,5 +11,10 @@ class RestGeminiTextClient
             prompt: String,
             generationConfig: GeminiGenerationConfig?,
             modelName: String?,
-        ): GeminiResult<String> = agent.sendMessage(prompt, generationConfig, modelName)
+        ): GeminiResult<String> =
+            agent.sendMessage(
+                prompt = prompt,
+                generationConfig = generationConfig,
+                modelName = modelName,
+            )
     }

@@ -111,6 +111,23 @@ class AgentChatMemoryTest {
     }
 
     @Test
+    fun promptBuilderKeepsUserProfileInSystemInstruction() {
+        val prepared =
+            AgentChatMemoryPromptBuilder.build(
+                latestUserMessage = "Explain the architecture",
+                chatMessages = emptyList(),
+                memory = AgentChatMemorySnapshot(),
+                userProfile = AgentChatProfileCatalog.defaults.first { it.id == PRODUCT_MANAGER_PROFILE_ID },
+            )
+
+        assertEquals(listOf(AgentChatMemoryLayer.USER_PROFILE), prepared.requestContext.includedLayers)
+        assertTrue(prepared.systemInstruction?.contains("Product manager") == true)
+        assertTrue(prepared.systemInstruction?.contains("Avoid code unless explicitly requested") == true)
+        assertEquals(listOf(AgentMessage.User("Explain the architecture")), prepared.messages)
+        assertTrue(prepared.requestContext.promptPreview.contains("[system]"))
+    }
+
+    @Test
     fun promptBuilderShowsHowSourcesChangePrompt() {
         val basePrompt =
             AgentChatMemoryPromptBuilder.build(

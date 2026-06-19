@@ -82,6 +82,21 @@ class GeminiDtosTest {
     }
 
     @Test
+    fun requestFromMessagesSerializesSystemInstruction() {
+        val encoded =
+            json.encodeToString(
+                GenerateContentRequest.fromMessages(
+                    messages = listOf(AgentMessage.User("Explain this")),
+                    systemInstruction = "Answer as a senior Kotlin developer.",
+                ),
+            )
+
+        assertTrue(encoded.contains("\"systemInstruction\""))
+        assertTrue(encoded.contains("\"text\":\"Answer as a senior Kotlin developer.\""))
+        assertTrue(encoded.contains("\"text\":\"Explain this\""))
+    }
+
+    @Test
     fun countTokensRequestSerializesMessagesWithoutGenerationConfig() {
         val encoded =
             json.encodeToString(
@@ -96,6 +111,24 @@ class GeminiDtosTest {
         assertTrue(encoded.contains("\"role\":\"user\""))
         assertTrue(encoded.contains("\"text\":\"Current request\""))
         assertFalse(encoded.contains("generationConfig"))
+        assertFalse(encoded.contains("generateContentRequest"))
+    }
+
+    @Test
+    fun countTokensRequestSerializesGenerateContentRequestWithSystemInstruction() {
+        val encoded =
+            json.encodeToString(
+                CountTokensRequest.fromMessages(
+                    messages = listOf(AgentMessage.User("Current request")),
+                    systemInstruction = "Use the active user profile.",
+                ),
+            )
+
+        assertTrue(encoded.contains("\"generateContentRequest\""))
+        assertTrue(encoded.contains("\"systemInstruction\""))
+        assertTrue(encoded.contains("\"text\":\"Use the active user profile.\""))
+        assertTrue(encoded.contains("\"text\":\"Current request\""))
+        assertFalse(encoded.startsWith("{\"contents\""))
     }
 
     @Test

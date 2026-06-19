@@ -8,21 +8,26 @@ import kotlinx.serialization.json.JsonElement
 @Serializable
 data class GenerateContentRequest(
     val contents: List<GeminiContentDto>,
+    @SerialName("systemInstruction")
+    val systemInstruction: GeminiContentDto? = null,
     @SerialName("generationConfig")
     val generationConfig: GeminiGenerationConfigDto? = null,
 ) {
     companion object {
         fun fromPrompt(
             prompt: String,
+            systemInstruction: String? = null,
             generationConfig: GeminiGenerationConfigDto? = null,
         ): GenerateContentRequest =
             fromMessages(
                 messages = listOf(AgentMessage.User(prompt)),
+                systemInstruction = systemInstruction,
                 generationConfig = generationConfig,
             )
 
         fun fromMessages(
             messages: List<AgentMessage>,
+            systemInstruction: String? = null,
             generationConfig: GeminiGenerationConfigDto? = null,
         ): GenerateContentRequest =
             GenerateContentRequest(
@@ -37,6 +42,7 @@ data class GenerateContentRequest(
                             parts = listOf(GeminiPartDto(text = message.text)),
                         )
                     },
+                systemInstruction = systemInstruction.toSystemInstructionContentOrNull(),
                 generationConfig = generationConfig,
             )
     }
@@ -44,13 +50,26 @@ data class GenerateContentRequest(
 
 @Serializable
 data class CountTokensRequest(
-    val contents: List<GeminiContentDto>,
+    val contents: List<GeminiContentDto>? = null,
+    @SerialName("generateContentRequest")
+    val generateContentRequest: GenerateContentRequest? = null,
 ) {
     companion object {
-        fun fromMessages(messages: List<AgentMessage>): CountTokensRequest =
-            CountTokensRequest(
-                contents = GenerateContentRequest.fromMessages(messages).contents,
-            )
+        fun fromMessages(
+            messages: List<AgentMessage>,
+            systemInstruction: String? = null,
+        ): CountTokensRequest {
+            val generateContentRequest =
+                GenerateContentRequest.fromMessages(
+                    messages = messages,
+                    systemInstruction = systemInstruction,
+                )
+            return if (generateContentRequest.systemInstruction == null) {
+                CountTokensRequest(contents = generateContentRequest.contents)
+            } else {
+                CountTokensRequest(generateContentRequest = generateContentRequest)
+            }
+        }
     }
 }
 
@@ -107,6 +126,11 @@ data class GeminiContentDto(
 data class GeminiPartDto(
     val text: String? = null,
 )
+
+private fun String?.toSystemInstructionContentOrNull(): GeminiContentDto? {
+    val text = this?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return GeminiContentDto(parts = listOf(GeminiPartDto(text = text)))
+}
 
 @Serializable
 data class GenerateContentResponse(
