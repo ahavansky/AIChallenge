@@ -1,7 +1,6 @@
 package com.akhavanskii.aichallenge.feature.agentchat
 
 import android.content.Context
-import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -25,8 +24,6 @@ import javax.inject.Singleton
 data class AgentChatHistorySnapshot(
     val messages: List<AgentChatMessage> = emptyList(),
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
-    val selectedAgent: AgentChatAgentOption = AgentChatAgentOption.GEMINI_3_5_FLASH,
-    val customTotalTokenLimit: Int? = null,
 )
 
 interface AgentChatHistoryStore {
@@ -141,18 +138,12 @@ class MarkdownAgentChatLongTermMemoryStore internal constructor(
 
 @Serializable
 private data class StoredAgentChatHistory(
-    val selectedAgentModelName: String = AgentChatAgentOption.GEMINI_3_5_FLASH.modelName,
-    val customTotalTokenLimit: Int? = null,
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val messages: List<StoredAgentChatMessage> = emptyList(),
 ) {
     fun toSnapshot(): AgentChatHistorySnapshot {
         val restoredMessages = messages.mapNotNull { it.toMessageOrNull() }
         return AgentChatHistorySnapshot(
-            selectedAgent =
-                AgentChatAgentOption.entries.firstOrNull { it.modelName == selectedAgentModelName }
-                    ?: AgentChatAgentOption.GEMINI_3_5_FLASH,
-            customTotalTokenLimit = customTotalTokenLimit,
             memory = memory,
             messages = restoredMessages,
         )
@@ -161,8 +152,6 @@ private data class StoredAgentChatHistory(
     companion object {
         fun fromSnapshot(snapshot: AgentChatHistorySnapshot): StoredAgentChatHistory =
             StoredAgentChatHistory(
-                selectedAgentModelName = snapshot.selectedAgent.modelName,
-                customTotalTokenLimit = snapshot.customTotalTokenLimit,
                 memory = snapshot.memory,
                 messages = snapshot.messages.filterNot { it.isLoading }.map(StoredAgentChatMessage::fromMessage),
             )
@@ -174,7 +163,6 @@ private data class StoredAgentChatMessage(
     val role: String,
     val text: String,
     val isError: Boolean = false,
-    val tokenUsage: GeminiTokenUsage? = null,
 ) {
     fun toMessageOrNull(): AgentChatMessage? {
         val restoredRole =
@@ -184,7 +172,6 @@ private data class StoredAgentChatMessage(
             role = restoredRole,
             text = text,
             isError = isError,
-            tokenUsage = tokenUsage,
         )
     }
 
@@ -194,7 +181,6 @@ private data class StoredAgentChatMessage(
                 role = message.role.name,
                 text = message.text,
                 isError = message.isError,
-                tokenUsage = message.tokenUsage,
             )
     }
 }

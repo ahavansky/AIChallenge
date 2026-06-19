@@ -1,6 +1,5 @@
 package com.akhavanskii.aichallenge.feature.agentchat
 
-import com.akhavanskii.aichallenge.core.network.GeminiTokenUsage
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -26,22 +25,10 @@ class JsonAgentChatHistoryStoreTest {
             val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
             val snapshot =
                 AgentChatHistorySnapshot(
-                    selectedAgent = AgentChatAgentOption.GEMINI_2_5_FLASH_LITE,
-                    customTotalTokenLimit = 12_345,
                     messages =
                         listOf(
                             AgentChatMessage(role = AgentChatRole.USER, text = "Remember this"),
-                            AgentChatMessage(
-                                role = AgentChatRole.MODEL,
-                                text = "Stored answer",
-                                tokenUsage =
-                                    GeminiTokenUsage(
-                                        currentRequestTokens = 3,
-                                        conversationHistoryTokens = 9,
-                                        modelResponseTokens = 4,
-                                        totalTokens = 13,
-                                    ),
-                            ),
+                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Stored answer"),
                             AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting", isLoading = true),
                         ),
                 )
@@ -51,6 +38,46 @@ class JsonAgentChatHistoryStoreTest {
             val expectedMessages = snapshot.messages.filterNot { it.isLoading }
             assertEquals(
                 snapshot.copy(messages = expectedMessages),
+                store.load(),
+            )
+        }
+
+    @Test
+    fun loadIgnoresLegacyModelAndTokenFields() =
+        runTest {
+            val historyFile = temporaryFolder.newFile("history.json")
+            historyFile.writeText(
+                """
+                {
+                  "selectedAgentModelName": "gemini-2.5-flash-lite",
+                  "customTotalTokenLimit": 12345,
+                  "memory": {},
+                  "messages": [
+                    {
+                      "role": "USER",
+                      "text": "Legacy question",
+                      "tokenUsage": {
+                        "totalTokens": 42
+                      }
+                    },
+                    {
+                      "role": "MODEL",
+                      "text": "Legacy answer"
+                    }
+                  ]
+                }
+                """.trimIndent(),
+            )
+            val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
+
+            assertEquals(
+                AgentChatHistorySnapshot(
+                    messages =
+                        listOf(
+                            AgentChatMessage(role = AgentChatRole.USER, text = "Legacy question"),
+                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Legacy answer"),
+                        ),
+                ),
                 store.load(),
             )
         }
