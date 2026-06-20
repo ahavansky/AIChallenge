@@ -35,10 +35,11 @@ Do not commit real keys. `local.properties`, `.env*`, and `secrets.properties` a
 
 This project calls Gemini directly from the Android app only because it is a demo/challenge build. For production, use a backend proxy or another server-side protection layer because secrets embedded in mobile apps can be extracted.
 
-Model and endpoint:
+Default model and endpoint:
 
-- Model: `gemini-3.5-flash`
+- Default model: `gemini-3.5-flash`
 - REST endpoint: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent`
+- Screens with a model selector pass the selected model name into the same `/models/{model}:generateContent` route.
 
 HuggingFace Lab reads a HuggingFace token from `HUGGINGFACE_API_KEY` or `HF_TOKEN`:
 
@@ -72,9 +73,15 @@ The response area shows both outputs in separate panes so the user can compare h
 
 ## Agent Chat
 
-Agent Chat is a separate screen for a personalized stateful LLM agent. It keeps explicit context sources separate: personalization is stored in `agent_chat_profiles.json` as editable user profiles and sent as Gemini `systemInstruction`, short-term memory is selected from successful chat messages in the JSON history, working memory is an editable `TaskContext` with goal/stage/plan/constraints/open questions/results, formal task state is stored as a finite state machine in `agent_chat_history.json`, and long-term memory is a user-editable `agent_chat_memory.md` file with durable facts, decisions, reusable knowledge, and invariants.
+Agent Chat is a separate screen for a personalized stateful LLM agent. It keeps explicit context sources separate: personalization is stored in `agent_chat_profiles.json` as editable user profiles and sent as Gemini `systemInstruction`, hard/soft invariants are stored in a separate user-editable `agent_chat_invariants.md` file, short-term memory is selected from successful chat messages in the JSON history, working memory is an editable `TaskContext` with goal/stage/plan/constraints/open questions/results, formal task state is stored as a finite state machine in `agent_chat_history.json`, and long-term memory is a user-editable `agent_chat_memory.md` file with durable facts, decisions, and reusable knowledge.
 
-`Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Planning begins with two fixed parallel branches: a requirements agent produces a requirements report, and a risks agent produces risks and validation criteria. The app stores both branch artifacts, then runs a synthesis step that writes the task spec. The remaining steps are sequential and store typed artifacts for the execution draft, validation report, and final answer. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed planning branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes formal task state above editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. The screen shows the current stage, step, branch status, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
+Agent Chat has a compact header model selector. The selected model is saved in `agent_chat_history.json` and used for every pipeline, branch, repair, and profile-comparison request:
+
+- `gemini-3.5-flash` - default project model.
+- `gemini-2.5-flash` - balanced Gemini model for everyday reasoning and implementation tasks.
+- `gemini-2.5-flash-lite` - lower-latency Gemini model for simpler or more iterative tasks.
+
+`Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Planning begins with two fixed parallel branches: a requirements agent produces a requirements report, and a risks agent produces risks and validation criteria. The app stores both branch artifacts, then runs a synthesis step that writes the task spec. The remaining steps are sequential and store typed artifacts for the execution draft, validation report, and final answer. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed planning branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes invariants before formal task state and editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. Hard invariant conflicts in user requests are refused locally before Gemini is called. Model outputs are checked before they are stored as typed artifacts; a hard invariant violation gets one repair request, and a repeated violation fails the current task step. The screen shows the current stage, step, branch status, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
 
 ## Context Agent
 

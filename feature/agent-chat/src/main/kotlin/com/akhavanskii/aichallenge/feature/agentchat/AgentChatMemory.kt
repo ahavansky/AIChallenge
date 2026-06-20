@@ -156,6 +156,7 @@ data class AgentChatLongTermMarkdown(
 @Serializable
 data class AgentChatMemorySelection(
     val includeChatHistory: Boolean = true,
+    val includeInvariants: Boolean = true,
     val includeTaskState: Boolean = true,
     val includeTaskContext: Boolean = true,
     val includeLongTermMarkdown: Boolean = true,
@@ -164,6 +165,7 @@ data class AgentChatMemorySelection(
 @Serializable
 data class AgentChatMemoryBudget(
     val chatHistoryMaxMessages: Int = DEFAULT_CHAT_HISTORY_MAX_MESSAGES,
+    val invariantsMaxChars: Int = DEFAULT_INVARIANTS_MAX_CHARS,
     val taskStateMaxChars: Int = DEFAULT_TASK_STATE_MAX_CHARS,
     val taskContextMaxChars: Int = DEFAULT_TASK_CONTEXT_MAX_CHARS,
     val longTermMarkdownMaxChars: Int = DEFAULT_LONG_TERM_MARKDOWN_MAX_CHARS,
@@ -175,6 +177,8 @@ data class AgentChatMemoryRequestContext(
     val budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
     val includedLayers: List<AgentChatMemoryLayer> = emptyList(),
     val chatHistoryMessageCount: Int = 0,
+    val invariantCount: Int = 0,
+    val hardInvariantCount: Int = 0,
     val taskStateArtifactCount: Int = 0,
     val taskContextItemCount: Int = 0,
     val longTermMarkdownChars: Int = 0,
@@ -188,6 +192,7 @@ enum class AgentChatMemoryLayer(
     val title: String,
 ) {
     USER_PROFILE("User profile"),
+    INVARIANTS("Invariants"),
     SHORT_TERM("Short-term"),
     TASK_STATE("Task state"),
     TASK_CONTEXT("TaskContext"),
@@ -205,6 +210,7 @@ object AgentChatMemoryPromptBuilder {
         latestUserMessage: String,
         chatMessages: List<AgentChatMessage>,
         memory: AgentChatMemorySnapshot,
+        invariants: AgentChatInvariantSet = AgentChatInvariantSet(),
         userProfile: AgentChatUserProfile? = null,
         selection: AgentChatMemorySelection = AgentChatMemorySelection(),
         budget: AgentChatMemoryBudget = AgentChatMemoryBudget(),
@@ -214,10 +220,21 @@ object AgentChatMemoryPromptBuilder {
         val includedLayers = mutableListOf<AgentChatMemoryLayer>()
         val systemInstruction =
             userProfile?.let { profile ->
-                AgentChatInstructionBuilder.buildSystemInstruction(profile = profile, taskStage = taskStage)
+                AgentChatInstructionBuilder.buildSystemInstruction(
+                    profile = profile,
+                    invariants = invariants,
+                    taskStage = taskStage,
+                )
             }
         if (userProfile?.hasMeaningfulContent == true) {
             includedLayers += AgentChatMemoryLayer.USER_PROFILE
+        }
+
+        if (selection.includeInvariants) {
+            invariants.toPromptBlockOrNull(budget.invariantsMaxChars)?.let { promptBlock ->
+                messages += AgentMessage.User(promptBlock)
+                includedLayers += AgentChatMemoryLayer.INVARIANTS
+            }
         }
 
         if (selection.includeTaskState) {
@@ -265,6 +282,8 @@ object AgentChatMemoryPromptBuilder {
                     budget = budget,
                     includedLayers = includedLayers,
                     chatHistoryMessageCount = shortTermMessages.size,
+                    invariantCount = if (selection.includeInvariants) invariants.invariants.size else 0,
+                    hardInvariantCount = if (selection.includeInvariants) invariants.hardCount else 0,
                     taskStateArtifactCount = if (selection.includeTaskState) memory.taskState.artifacts.size else 0,
                     taskContextItemCount = if (selection.includeTaskContext) memory.taskContext.itemCount else 0,
                     longTermMarkdownChars = longTermMarkdownChars,
@@ -361,6 +380,7 @@ fun AgentChatMemorySnapshot.formatDebugDetails(
             appendLine("Prompt context: $layers")
             append(
                 "Counts: short=${request.chatHistoryMessageCount}, " +
+                    "invariants=${request.invariantCount}/${request.hardInvariantCount} hard, " +
                     "taskState=${request.taskStateArtifactCount}, task=${request.taskContextItemCount}, " +
                     "longChars=${request.longTermMarkdownChars}, " +
                     "systemChars=${request.systemInstructionChars}",
@@ -480,6 +500,7 @@ private fun List<AgentMessage>.toPromptPreview(systemInstruction: String?): Stri
 private fun String.takePromptChars(maxChars: Int): String = take(maxChars.coerceAtLeast(0))
 
 private const val DEFAULT_CHAT_HISTORY_MAX_MESSAGES = 12
+private const val DEFAULT_INVARIANTS_MAX_CHARS = 2_000
 private const val DEFAULT_TASK_STATE_MAX_CHARS = 2_000
 private const val DEFAULT_TASK_CONTEXT_MAX_CHARS = 1_200
 private const val DEFAULT_LONG_TERM_MARKDOWN_MAX_CHARS = 2_000

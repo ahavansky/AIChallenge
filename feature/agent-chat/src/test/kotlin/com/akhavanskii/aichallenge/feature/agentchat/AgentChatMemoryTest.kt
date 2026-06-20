@@ -158,6 +158,55 @@ class AgentChatMemoryTest {
     }
 
     @Test
+    fun promptBuilderIncludesInvariantsBeforeTaskStateAndTaskContext() {
+        val taskState =
+            AgentTaskStateMachine
+                .reduce(
+                    state = AgentTaskState(),
+                    event = AgentTaskEvent.Start(taskId = "task-1", prompt = "Build feature"),
+                ).state
+        val prepared =
+            AgentChatMemoryPromptBuilder.build(
+                latestUserMessage = "Continue",
+                chatMessages = emptyList(),
+                memory =
+                    AgentChatMemorySnapshot(
+                        taskState = taskState,
+                        taskContext = AgentChatTaskContext(goal = "Use invariant-safe stack"),
+                    ),
+                invariants =
+                    AgentChatInvariantSet(
+                        markdown =
+                            """
+                            # Invariants
+
+                            Invariant: Android stack
+                            Type: tech_stack
+                            Severity: hard
+                            Rule: Use Kotlin and Jetpack Compose.
+                            Reject: React Native
+                            Reason: Stack is fixed.
+                            Alternative: Use Kotlin/Compose.
+                            """.trimIndent(),
+                    ),
+            )
+
+        assertEquals(
+            listOf(
+                AgentChatMemoryLayer.INVARIANTS,
+                AgentChatMemoryLayer.TASK_STATE,
+                AgentChatMemoryLayer.TASK_CONTEXT,
+            ),
+            prepared.requestContext.includedLayers,
+        )
+        assertEquals(1, prepared.requestContext.invariantCount)
+        assertEquals(1, prepared.requestContext.hardInvariantCount)
+        assertTrue((prepared.messages[0] as AgentMessage.User).text.contains("Active invariants"))
+        assertTrue((prepared.messages[1] as AgentMessage.User).text.contains("Formal task state"))
+        assertTrue((prepared.messages[2] as AgentMessage.User).text.contains("TaskContext"))
+    }
+
+    @Test
     fun promptBuilderShowsHowSourcesChangePrompt() {
         val basePrompt =
             AgentChatMemoryPromptBuilder.build(

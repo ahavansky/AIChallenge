@@ -155,7 +155,10 @@ class AgentChatViewModelTest {
             assertFalse(viewModel.uiState.value.canRunTask)
             assertTrue(
                 fakeAgent.calls
-                    .all { call -> call.modelName == null && call.totalTokenLimit == null },
+                    .all { call ->
+                        call.modelName == AgentChatModelOption.DEFAULT.modelName &&
+                            call.totalTokenLimit == null
+                    },
             )
             assertEquals(
                 listOf(
@@ -175,6 +178,159 @@ class AgentChatViewModelTest {
                     .first()
                     .messages
                     .last() is AgentMessage.User,
+            )
+        }
+
+    @Test
+    fun modelSelectionPersistsAndRunTaskUsesSelectedModel() =
+        runTest {
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
+            val historyStore = FakeAgentChatHistoryStore()
+            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ModelChanged(AgentChatModelOption.GEMINI_2_5_FLASH_LITE))
+            runCurrent()
+            viewModel.onAction(AgentChatAction.InputChanged("Create a compact plan"))
+            viewModel.onAction(AgentChatAction.StartTask)
+            runCurrent()
+
+            assertEquals(AgentChatModelOption.GEMINI_2_5_FLASH_LITE, viewModel.uiState.value.selectedModel)
+            assertEquals(AgentChatModelOption.GEMINI_2_5_FLASH_LITE, historyStore.snapshot.selectedModel)
+            assertTrue(
+                fakeAgent.calls.all { call ->
+                    call.modelName == AgentChatModelOption.GEMINI_2_5_FLASH_LITE.modelName
+                },
+            )
+        }
+
+    @Test
+    fun startTaskRefusesHardInvariantConflictBeforeCallingLlm() =
+        runTest {
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
+            val historyStore = FakeAgentChatHistoryStore()
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore = historyStore,
+                    invariantStore = FakeAgentChatInvariantStore(androidStackInvariants()),
+                )
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Build this screen with React Native"))
+            viewModel.onAction(AgentChatAction.StartTask)
+            runCurrent()
+
+            assertEquals(0, fakeAgent.calls.size)
+            assertEquals(AgentTaskStatus.IDLE, viewModel.uiState.value.memory.taskState.status)
+            assertEquals("", viewModel.uiState.value.input)
+            assertEquals(
+                AgentChatMessage(role = AgentChatRole.USER, text = "Build this screen with React Native"),
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .first(),
+            )
+            val refusal =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertTrue(refusal.isError)
+            assertTrue(refusal.text.contains("Android stack"))
+            assertTrue(refusal.text.contains("Kotlin/Compose"))
+            assertEquals(AgentChatInvariantCheckStatus.BLOCKED, viewModel.uiState.value.lastInvariantCheck.status)
+            assertEquals("React Native", viewModel.uiState.value.lastInvariantCheck.conflict)
+            assertEquals(viewModel.uiState.value.messages, historyStore.snapshot.messages)
+        }
+
+    @Test
+    fun violatingModelOutputIsRepairedOnceBeforeArtifactIsStored() =
+        runTest {
+            val historyStore =
+                FakeAgentChatHistoryStore(
+                    AgentChatHistorySnapshot(
+                        memory = AgentChatMemorySnapshot(taskState = pausedExecutionState()),
+                    ),
+                )
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Use React Native for the screen.")),
+                                CompletableDeferred(GeminiResult.Success("Use Kotlin and Jetpack Compose for the screen.")),
+                                CompletableDeferred(GeminiResult.Success("Invariant check: passed")),
+                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                            ),
+                        ),
+                )
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore = historyStore,
+                    invariantStore = FakeAgentChatInvariantStore(androidStackInvariants()),
+                )
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ResumeTask)
+            runCurrent()
+
+            val taskState = viewModel.uiState.value.memory.taskState
+            assertEquals(4, fakeAgent.calls.size)
+            assertTrue(
+                (fakeAgent.calls[1].messages.last() as AgentMessage.User)
+                    .text
+                    .contains("violated hard invariants"),
+            )
+            assertEquals(
+                "Use Kotlin and Jetpack Compose for the screen.",
+                taskState.artifact(AgentTaskArtifactType.EXECUTION_DRAFT)?.text,
+            )
+            assertEquals(AgentChatInvariantCheckStatus.REPAIRED, viewModel.uiState.value.lastInvariantCheck.status)
+            assertEquals(AgentTaskStatus.DONE, taskState.status)
+        }
+
+    @Test
+    fun repeatedInvariantViolationFailsCurrentTaskStep() =
+        runTest {
+            val historyStore =
+                FakeAgentChatHistoryStore(
+                    AgentChatHistorySnapshot(
+                        memory = AgentChatMemorySnapshot(taskState = pausedExecutionState()),
+                    ),
+                )
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Use React Native for the screen.")),
+                                CompletableDeferred(GeminiResult.Success("Still use React Native for the screen.")),
+                            ),
+                        ),
+                )
+            val viewModel =
+                createViewModel(
+                    fakeAgent = fakeAgent,
+                    historyStore = historyStore,
+                    invariantStore = FakeAgentChatInvariantStore(androidStackInvariants()),
+                )
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ResumeTask)
+            runCurrent()
+
+            assertEquals(2, fakeAgent.calls.size)
+            assertEquals(AgentTaskStatus.FAILED, viewModel.uiState.value.memory.taskState.status)
+            assertEquals(AgentChatInvariantCheckStatus.FAILED, viewModel.uiState.value.lastInvariantCheck.status)
+            assertTrue(
+                viewModel.uiState.value.messages
+                    .last()
+                    .text
+                    .contains("could not be repaired"),
             )
         }
 
@@ -233,7 +389,11 @@ class AgentChatViewModelTest {
             assertTrue(fakeAgent.calls[0].systemInstruction?.contains("Custom user") == true)
             assertTrue(fakeAgent.calls[1].systemInstruction?.contains("Android beginner") == true)
             assertTrue(fakeAgent.calls[2].systemInstruction?.contains("Senior Kotlin developer") == true)
-            assertTrue(fakeAgent.calls.all { it.modelName == null && it.totalTokenLimit == null })
+            assertTrue(
+                fakeAgent.calls.all {
+                    it.modelName == AgentChatModelOption.DEFAULT.modelName && it.totalTokenLimit == null
+                },
+            )
             assertEquals(
                 listOf("Custom answer", "Beginner answer", "Senior answer"),
                 viewModel.uiState.value.compareResults
@@ -564,12 +724,64 @@ class AgentChatViewModelTest {
             ),
         )
 
+    private fun androidStackInvariants(): AgentChatInvariantSet =
+        AgentChatInvariantSet(
+            markdown =
+                """
+                # Invariants
+
+                Invariant: Android stack
+                Type: tech_stack
+                Severity: hard
+                Rule: Android implementation must use Kotlin and Jetpack Compose.
+                Reject: React Native
+                Reason: The project architecture and stack are fixed.
+                Alternative: Offer a Kotlin/Compose solution instead.
+                """.trimIndent(),
+        )
+
+    private fun pausedExecutionState(): AgentTaskState =
+        AgentTaskState(
+            taskId = "task-1",
+            originalPrompt = "Build Android screen",
+            stage = AgentTaskStage.EXECUTION,
+            step = AgentTaskStep.CREATE_DRAFT,
+            status = AgentTaskStatus.PAUSED,
+            branches =
+                listOf(
+                    AgentTaskBranch(
+                        id = AgentTaskBranchId.REQUIREMENTS,
+                        expectedArtifactType = AgentTaskArtifactType.REQUIREMENTS_REPORT,
+                        status = AgentTaskBranchStatus.DONE,
+                    ),
+                    AgentTaskBranch(
+                        id = AgentTaskBranchId.RISKS,
+                        expectedArtifactType = AgentTaskArtifactType.RISKS_REPORT,
+                        status = AgentTaskBranchStatus.DONE,
+                    ),
+                ),
+            artifacts =
+                listOf(
+                    AgentTaskArtifact(AgentTaskArtifactType.REQUIREMENTS_REPORT, "Requirements report"),
+                    AgentTaskArtifact(AgentTaskArtifactType.RISKS_REPORT, "Risks report"),
+                    AgentTaskArtifact(AgentTaskArtifactType.TASK_SPEC, "Task spec"),
+                ),
+        )
+
     private fun createViewModel(
         fakeAgent: FakeLlmAgent = FakeLlmAgent(),
         historyStore: AgentChatHistoryStore = FakeAgentChatHistoryStore(),
         longTermMemoryStore: AgentChatLongTermMemoryStore = FakeAgentChatLongTermMemoryStore(),
         userProfileStore: AgentChatUserProfileStore = FakeAgentChatUserProfileStore(),
-    ): AgentChatViewModel = AgentChatViewModel(fakeAgent, historyStore, longTermMemoryStore, userProfileStore)
+        invariantStore: AgentChatInvariantStore = FakeAgentChatInvariantStore(),
+    ): AgentChatViewModel =
+        AgentChatViewModel(
+            llmAgent = fakeAgent,
+            historyStore = historyStore,
+            longTermMemoryStore = longTermMemoryStore,
+            userProfileStore = userProfileStore,
+            invariantStore = invariantStore,
+        )
 
     private class FakeLlmAgent(
         result: AgentResult<String> = GeminiResult.Success("Answer"),
@@ -647,6 +859,19 @@ class AgentChatViewModelTest {
 
         override suspend fun save(snapshot: AgentChatProfileSnapshot) {
             this.snapshot = snapshot.normalized
+        }
+    }
+
+    private class FakeAgentChatInvariantStore(
+        initialInvariants: AgentChatInvariantSet = AgentChatInvariantSet(),
+    ) : AgentChatInvariantStore {
+        var invariants = initialInvariants
+            private set
+
+        override suspend fun load(): AgentChatInvariantSet = invariants
+
+        override suspend fun save(invariants: AgentChatInvariantSet) {
+            this.invariants = invariants
         }
     }
 }

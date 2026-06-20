@@ -22,6 +22,7 @@ import javax.inject.Qualifier
 import javax.inject.Singleton
 
 data class AgentChatHistorySnapshot(
+    val selectedModel: AgentChatModelOption = AgentChatModelOption.DEFAULT,
     val messages: List<AgentChatMessage> = emptyList(),
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
 )
@@ -140,10 +141,12 @@ class MarkdownAgentChatLongTermMemoryStore internal constructor(
 private data class StoredAgentChatHistory(
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val messages: List<StoredAgentChatMessage> = emptyList(),
+    val selectedModelName: String = AgentChatModelOption.DEFAULT.modelName,
 ) {
     fun toSnapshot(): AgentChatHistorySnapshot {
         val restoredMessages = messages.mapNotNull { it.toMessageOrNull() }
         return AgentChatHistorySnapshot(
+            selectedModel = AgentChatModelOption.fromModelName(selectedModelName),
             memory = memory,
             messages = restoredMessages,
         )
@@ -154,6 +157,7 @@ private data class StoredAgentChatHistory(
             StoredAgentChatHistory(
                 memory = snapshot.memory,
                 messages = snapshot.messages.filterNot { it.isLoading }.map(StoredAgentChatMessage::fromMessage),
+                selectedModelName = snapshot.selectedModel.modelName,
             )
     }
 }

@@ -8,6 +8,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -80,6 +81,23 @@ class JsonAgentChatHistoryStoreTest {
                 ),
                 store.load(),
             )
+        }
+
+    @Test
+    fun saveAndLoadSelectedModelRoundTrip() =
+        runTest {
+            val historyFile = File(temporaryFolder.root, "history.json")
+            val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
+            val snapshot =
+                AgentChatHistorySnapshot(
+                    selectedModel = AgentChatModelOption.GEMINI_2_5_FLASH_LITE,
+                    messages = listOf(AgentChatMessage(role = AgentChatRole.USER, text = "Use lite")),
+                )
+
+            store.save(snapshot)
+
+            assertEquals(snapshot, store.load())
+            assertTrue(historyFile.readText().contains(AgentChatModelOption.GEMINI_2_5_FLASH_LITE.modelName))
         }
 
     @Test

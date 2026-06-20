@@ -8,13 +8,12 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -55,13 +55,14 @@ fun AgentChatScreen(
     modifier: Modifier = Modifier,
 ) {
     val contentScrollState = rememberScrollState()
+    var isInlineEditorFocused by remember { mutableStateOf(false) }
+    val shouldHideComposer = isInlineEditorFocused && WindowInsets.isImeVisible
 
     Column(
         modifier =
             modifier
                 .fillMaxSize()
-                .padding(WindowInsets.safeDrawing.asPaddingValues())
-                .imePadding()
+                .safeDrawingPadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -80,8 +81,16 @@ fun AgentChatScreen(
             ) {
                 Text(
                     text = "Agent Chat",
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                AgentChatModelMenu(
+                    selectedModel = state.selectedModel,
+                    enabled = !state.isLoading,
+                    onSelected = { onAction(AgentChatAction.ModelChanged(it)) },
                 )
                 TextButton(
                     onClick = onBack,
@@ -110,6 +119,21 @@ fun AgentChatScreen(
                 onLongTermMemoryChanged = { onAction(AgentChatAction.LongTermMemoryChanged(it)) },
                 onSaveLongTermMemory = { onAction(AgentChatAction.SaveLongTermMemory) },
                 onClearTaskContext = { onAction(AgentChatAction.ClearTaskContext) },
+                onInlineEditorFocusChanged = { isInlineEditorFocused = it },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            InvariantGuardPanel(
+                invariants = state.invariants,
+                invariantsInput = state.invariantsInput,
+                lastCheck = state.lastInvariantCheck,
+                isInvariantsDirty = state.isInvariantsDirty,
+                enabled = !state.isLoading,
+                canSaveInvariants = state.canSaveInvariants,
+                onInvariantsChanged = { onAction(AgentChatAction.InvariantsChanged(it)) },
+                onSaveInvariants = { onAction(AgentChatAction.SaveInvariants) },
+                onUseSafeAlternative = { onAction(AgentChatAction.InputChanged(it)) },
+                onInlineEditorFocusChanged = { isInlineEditorFocused = it },
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -137,51 +161,58 @@ fun AgentChatScreen(
             )
         }
 
-        OutlinedTextField(
-            value = state.input,
-            onValueChange = { onAction(AgentChatAction.InputChanged(it)) },
-            enabled = !state.isLoading,
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 68.dp, max = 112.dp)
-                    .testTag(AgentChatTags.INPUT),
-            label = { Text("Message") },
-            placeholder = { Text("Ask a follow-up.") },
-            minLines = 2,
-            maxLines = INPUT_MAX_LINES,
-            shape = RoundedCornerShape(8.dp),
-            colors =
-                OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                ),
-        )
+        if (!shouldHideComposer) {
+            OutlinedTextField(
+                value = state.input,
+                onValueChange = { onAction(AgentChatAction.InputChanged(it)) },
+                enabled = !state.isLoading,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 68.dp, max = 112.dp)
+                        .testTag(AgentChatTags.INPUT)
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused) {
+                                isInlineEditorFocused = false
+                            }
+                        },
+                label = { Text("Message") },
+                placeholder = { Text("Ask a follow-up.") },
+                minLines = 2,
+                maxLines = INPUT_MAX_LINES,
+                shape = RoundedCornerShape(8.dp),
+                colors =
+                    OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    ),
+            )
 
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            ChallengeButton(
-                onClick = { onAction(AgentChatAction.StartTask) },
-                enabled = state.canRunTask,
-                modifier = Modifier.testTag(AgentChatTags.RUN_TASK_BUTTON),
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Run task")
-            }
-            TextButton(
-                onClick = { onAction(AgentChatAction.ClearChat) },
-                enabled = state.canClear,
-                modifier = Modifier.testTag(AgentChatTags.CLEAR_BUTTON),
-            ) {
-                Text("Clear chat")
-            }
-            TextButton(
-                onClick = { onAction(AgentChatAction.Stop) },
-                enabled = state.canStop,
-                modifier = Modifier.testTag(AgentChatTags.STOP_BUTTON),
-            ) {
-                Text("Stop")
+                ChallengeButton(
+                    onClick = { onAction(AgentChatAction.StartTask) },
+                    enabled = state.canRunTask,
+                    modifier = Modifier.testTag(AgentChatTags.RUN_TASK_BUTTON),
+                ) {
+                    Text("Run task")
+                }
+                TextButton(
+                    onClick = { onAction(AgentChatAction.ClearChat) },
+                    enabled = state.canClear,
+                    modifier = Modifier.testTag(AgentChatTags.CLEAR_BUTTON),
+                ) {
+                    Text("Clear chat")
+                }
+                TextButton(
+                    onClick = { onAction(AgentChatAction.Stop) },
+                    enabled = state.canStop,
+                    modifier = Modifier.testTag(AgentChatTags.STOP_BUTTON),
+                ) {
+                    Text("Stop")
+                }
             }
         }
     }
@@ -381,6 +412,7 @@ private fun MemoryLayersSummary(
     onLongTermMemoryChanged: (String) -> Unit,
     onSaveLongTermMemory: () -> Unit,
     onClearTaskContext: () -> Unit,
+    onInlineEditorFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isExpanded by remember { mutableStateOf(false) }
@@ -487,7 +519,11 @@ private fun MemoryLayersSummary(
                     }
                 }
                 Text(
-                    text = memory.formatDebugDetails(messages, activeProfile = activeProfile),
+                    text =
+                        memory.formatDebugDetails(
+                            chatMessages = messages,
+                            activeProfile = activeProfile,
+                        ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -500,6 +536,7 @@ private fun MemoryLayersSummary(
                             Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 120.dp)
+                                .onFocusChanged { onInlineEditorFocusChanged(it.isFocused) }
                                 .testTag(AgentChatTags.PROFILE_INPUT),
                         label = { Text("User profile", style = MaterialTheme.typography.labelSmall) },
                         minLines = 5,
@@ -521,6 +558,7 @@ private fun MemoryLayersSummary(
                             Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 96.dp)
+                                .onFocusChanged { onInlineEditorFocusChanged(it.isFocused) }
                                 .testTag(AgentChatTags.TASK_CONTEXT_INPUT),
                         label = { Text("TaskContext", style = MaterialTheme.typography.labelSmall) },
                         minLines = 4,
@@ -549,6 +587,7 @@ private fun MemoryLayersSummary(
                             Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 132.dp)
+                                .onFocusChanged { onInlineEditorFocusChanged(it.isFocused) }
                                 .testTag(AgentChatTags.LONG_TERM_MEMORY_INPUT),
                         label = {
                             Text(
@@ -589,6 +628,494 @@ private fun MemoryLayersSummary(
             }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InvariantGuardPanel(
+    invariants: AgentChatInvariantSet,
+    invariantsInput: String,
+    lastCheck: AgentChatInvariantCheckSnapshot,
+    isInvariantsDirty: Boolean,
+    enabled: Boolean,
+    canSaveInvariants: Boolean,
+    onInvariantsChanged: (String) -> Unit,
+    onSaveInvariants: () -> Unit,
+    onUseSafeAlternative: (String) -> Unit,
+    onInlineEditorFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableStateOf(InvariantGuardTab.RULES) }
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.INVARIANT_GUARD),
+        shape = RoundedCornerShape(8.dp),
+        color = lastCheck.status.containerColor(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Invariant Guard",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = lastCheck.status.contentColor(),
+                )
+                Text(
+                    text = " · ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = lastCheck.status.contentColor(),
+                )
+                Text(
+                    text =
+                        buildString {
+                            append("${invariants.invariants.size} rules")
+                            append(" · ${invariants.hardCount} hard")
+                            append(if (isInvariantsDirty) " · Unsaved" else " · Saved")
+                            append(" · Last: ${lastCheck.status.title}")
+                        },
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .padding(end = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = lastCheck.status.contentColor(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (isExpanded) "Hide" else "Details",
+                    modifier =
+                        Modifier
+                            .clickable { isExpanded = !isExpanded }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag(AgentChatTags.INVARIANT_GUARD_TOGGLE),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            if (isExpanded) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    InvariantGuardTab.entries.forEach { tab ->
+                        TextButton(
+                            onClick = { selectedTab = tab },
+                            modifier = Modifier.testTag("${AgentChatTags.INVARIANT_TAB_PREFIX}_${tab.name.lowercase()}"),
+                        ) {
+                            Text(
+                                text = tab.title,
+                                fontWeight = if (selectedTab == tab) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
+                }
+
+                when (selectedTab) {
+                    InvariantGuardTab.RULES ->
+                        InvariantRulesTab(
+                            invariants = invariants,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    InvariantGuardTab.TEST ->
+                        InvariantTestTab(
+                            invariants = invariants,
+                            enabled = enabled,
+                            onInlineEditorFocusChanged = onInlineEditorFocusChanged,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    InvariantGuardTab.EDITOR ->
+                        InvariantEditorTab(
+                            invariants = invariants,
+                            invariantsInput = invariantsInput,
+                            isInvariantsDirty = isInvariantsDirty,
+                            enabled = enabled,
+                            canSaveInvariants = canSaveInvariants,
+                            onInvariantsChanged = onInvariantsChanged,
+                            onSaveInvariants = onSaveInvariants,
+                            onInlineEditorFocusChanged = onInlineEditorFocusChanged,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    InvariantGuardTab.LAST_CHECK ->
+                        InvariantLastCheckTab(
+                            lastCheck = lastCheck,
+                            onUseSafeAlternative = onUseSafeAlternative,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InvariantRulesTab(
+    invariants: AgentChatInvariantSet,
+    modifier: Modifier = Modifier,
+) {
+    val report = invariants.parseReport
+    Column(
+        modifier = modifier.testTag(AgentChatTags.INVARIANT_RULES),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "${report.invariants.size} valid · ${report.ignoredCount} ignored",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (report.invariants.isEmpty()) {
+            Text(
+                text = "No valid invariant rules.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        report.invariants.forEach { invariant ->
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = invariant.title,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = " · ${invariant.severity.name.lowercase()} · ${invariant.type.ifBlank { "general" }}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "Rule: ${invariant.rule}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (invariant.reject.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        invariant.reject.forEach { rejected ->
+                            InvariantChip(text = "Reject: $rejected")
+                        }
+                    }
+                }
+                if (invariant.alternative.isNotBlank()) {
+                    Text(
+                        text = "Alternative: ${invariant.alternative}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        report.ignoredBlocks.forEach { ignored ->
+            Text(
+                text = "Ignored block: ${ignored.title}. Missing: ${ignored.missingFields.joinToString()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InvariantTestTab(
+    invariants: AgentChatInvariantSet,
+    enabled: Boolean,
+    onInlineEditorFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var testInput by remember { mutableStateOf("") }
+    var testResult by remember(invariants.markdown) { mutableStateOf<AgentChatInvariantCheckResult?>(null) }
+
+    Column(
+        modifier = modifier.testTag(AgentChatTags.INVARIANT_TEST),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = testInput,
+            onValueChange = {
+                testInput = it
+                testResult = null
+            },
+            enabled = enabled,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { onInlineEditorFocusChanged(it.isFocused) }
+                    .testTag(AgentChatTags.INVARIANT_TEST_INPUT),
+            label = { Text("Test request", style = MaterialTheme.typography.labelSmall) },
+            minLines = 2,
+            maxLines = 3,
+            textStyle = MaterialTheme.typography.bodySmall,
+            shape = RoundedCornerShape(8.dp),
+            colors =
+                OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                ),
+        )
+        ChallengeButton(
+            onClick = { testResult = AgentChatInvariantChecker.check(testInput, invariants) },
+            enabled = enabled && testInput.isNotBlank(),
+            modifier = Modifier.testTag(AgentChatTags.INVARIANT_TEST_BUTTON),
+        ) {
+            Text("Check")
+        }
+        testResult?.let { result ->
+            InvariantCheckResultDetails(
+                title = if (result.hasHardViolations) "Blocked" else "Passed",
+                violation = result.hardViolations.firstOrNull(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun InvariantEditorTab(
+    invariants: AgentChatInvariantSet,
+    invariantsInput: String,
+    isInvariantsDirty: Boolean,
+    enabled: Boolean,
+    canSaveInvariants: Boolean,
+    onInvariantsChanged: (String) -> Unit,
+    onSaveInvariants: () -> Unit,
+    onInlineEditorFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val previewSet = invariants.copy(markdown = invariantsInput)
+    val report = previewSet.parseReport
+    Column(
+        modifier = modifier.testTag(AgentChatTags.INVARIANT_EDITOR),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "${report.invariants.size} valid · ${report.ignoredCount} ignored",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = invariantsInput,
+            onValueChange = onInvariantsChanged,
+            enabled = enabled,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 132.dp)
+                    .onFocusChanged { onInlineEditorFocusChanged(it.isFocused) }
+                    .testTag(AgentChatTags.INVARIANTS_INPUT),
+            label = {
+                Text(
+                    text = invariants.fileName,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            },
+            minLines = 5,
+            maxLines = INVARIANTS_MAX_LINES,
+            textStyle = MaterialTheme.typography.bodySmall,
+            shape = RoundedCornerShape(8.dp),
+            colors =
+                OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                ),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ChallengeButton(
+                onClick = onSaveInvariants,
+                enabled = canSaveInvariants,
+                modifier = Modifier.testTag(AgentChatTags.SAVE_INVARIANTS_BUTTON),
+            ) {
+                Text("Save invariants.md")
+            }
+            Text(
+                text = if (isInvariantsDirty) "Unsaved" else "Saved",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        report.ignoredBlocks.forEach { ignored ->
+            Text(
+                text = "Ignored block: ${ignored.title}. Missing: ${ignored.missingFields.joinToString()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InvariantLastCheckTab(
+    lastCheck: AgentChatInvariantCheckSnapshot,
+    onUseSafeAlternative: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.testTag(AgentChatTags.INVARIANT_LAST_CHECK),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = "Status: ${lastCheck.status.title}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Stage: ${lastCheck.stage.title}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        InvariantCheckLine("Prompt layer", if (lastCheck.promptLayerIncluded) "included" else "not included")
+        InvariantCheckLine("Repair", if (lastCheck.repairAttempted) "attempted" else "not attempted")
+        InvariantCheckLine("Artifact stored", if (lastCheck.artifactStored) "yes" else "no")
+        if (lastCheck.invariantTitle.isNotBlank()) {
+            InvariantCheckResultDetails(
+                title = "Violated invariant",
+                violation = lastCheck.toViolationOrNull(),
+            )
+        }
+        if (lastCheck.safeAlternativePrompt.isNotBlank()) {
+            TextButton(
+                onClick = { onUseSafeAlternative(lastCheck.safeAlternativePrompt) },
+                modifier = Modifier.testTag(AgentChatTags.INVARIANT_SAFE_ALTERNATIVE_BUTTON),
+            ) {
+                Text("Use safe alternative")
+            }
+        }
+    }
+}
+
+@Composable
+private fun InvariantCheckLine(
+    label: String,
+    value: String,
+) {
+    Text(
+        text = "$label: $value",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun InvariantCheckResultDetails(
+    title: String,
+    violation: AgentChatInvariantViolation?,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (violation == null) {
+            Text(
+                text = "No hard invariant conflicts.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                text = "Invariant: ${violation.invariant.title}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Conflict: ${violation.matchedText}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (violation.invariant.reason.isNotBlank()) {
+                Text(
+                    text = "Reason: ${violation.invariant.reason}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (violation.invariant.alternative.isNotBlank()) {
+                Text(
+                    text = "Alternative: ${violation.invariant.alternative}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InvariantChip(text: String) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun AgentChatInvariantCheckSnapshot.toViolationOrNull(): AgentChatInvariantViolation? =
+    invariantTitle
+        .takeIf { it.isNotBlank() }
+        ?.let { title ->
+            AgentChatInvariantViolation(
+                invariant =
+                    AgentChatInvariant(
+                        title = title,
+                        rule = reason.ifBlank { title },
+                        reason = reason,
+                        alternative = alternative,
+                    ),
+                matchedText = conflict,
+            )
+        }
+
+@Composable
+private fun AgentChatInvariantCheckStatus.containerColor() =
+    when (this) {
+        AgentChatInvariantCheckStatus.NOT_RUN -> MaterialTheme.colorScheme.surfaceContainer
+        AgentChatInvariantCheckStatus.PASSED -> MaterialTheme.colorScheme.tertiaryContainer
+        AgentChatInvariantCheckStatus.BLOCKED -> MaterialTheme.colorScheme.errorContainer
+        AgentChatInvariantCheckStatus.REPAIRED -> MaterialTheme.colorScheme.secondaryContainer
+        AgentChatInvariantCheckStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
+    }
+
+@Composable
+private fun AgentChatInvariantCheckStatus.contentColor() =
+    when (this) {
+        AgentChatInvariantCheckStatus.NOT_RUN -> MaterialTheme.colorScheme.onSurfaceVariant
+        AgentChatInvariantCheckStatus.PASSED -> MaterialTheme.colorScheme.onTertiaryContainer
+        AgentChatInvariantCheckStatus.BLOCKED -> MaterialTheme.colorScheme.onErrorContainer
+        AgentChatInvariantCheckStatus.REPAIRED -> MaterialTheme.colorScheme.onSecondaryContainer
+        AgentChatInvariantCheckStatus.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+    }
+
+private enum class InvariantGuardTab(
+    val title: String,
+) {
+    RULES("Rules"),
+    TEST("Test"),
+    EDITOR("Editor"),
+    LAST_CHECK("Last check"),
 }
 
 private fun AgentChatMemorySnapshot.formatCompactMemoryDetails(
@@ -679,6 +1206,55 @@ private fun ProfileMenu(
                     onSelected(profile.id)
                 },
                 modifier = Modifier.testTag("${AgentChatTags.PROFILE_PREFIX}_${profile.id}"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentChatModelMenu(
+    selectedModel: AgentChatModelOption,
+    enabled: Boolean,
+    onSelected: (AgentChatModelOption) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    TextButton(
+        onClick = { expanded = true },
+        enabled = enabled,
+        modifier =
+            modifier
+                .width(156.dp)
+                .testTag(AgentChatTags.MODEL_MENU_BUTTON),
+    ) {
+        Text(
+            text = "Model: ${selectedModel.compactTitle}",
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+    ) {
+        AgentChatModelOption.entries.forEach { model ->
+            DropdownMenuItem(
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(model.title, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = model.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                onClick = {
+                    expanded = false
+                    onSelected(model)
+                },
+                modifier = Modifier.testTag("${AgentChatTags.MODEL_PREFIX}_${model.name}"),
             )
         }
     }
@@ -866,6 +1442,8 @@ private fun ChatMessagePanel(
 object AgentChatTags {
     const val BACK_BUTTON = "agent_chat_back_button"
     const val INPUT = "agent_chat_input"
+    const val MODEL_MENU_BUTTON = "agent_chat_model_menu_button"
+    const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
@@ -891,6 +1469,19 @@ object AgentChatTags {
     const val TASK_CONTEXT_EDITOR_TOGGLE = "agent_chat_task_context_editor_toggle"
     const val TASK_CONTEXT_INPUT = "agent_chat_task_context_input"
     const val CLEAR_TASK_CONTEXT_BUTTON = "agent_chat_clear_task_context_button"
+    const val INVARIANT_GUARD = "agent_chat_invariant_guard"
+    const val INVARIANT_GUARD_TOGGLE = "agent_chat_invariant_guard_toggle"
+    const val INVARIANT_TAB_PREFIX = "agent_chat_invariant_tab"
+    const val INVARIANT_RULES = "agent_chat_invariant_rules"
+    const val INVARIANT_TEST = "agent_chat_invariant_test"
+    const val INVARIANT_TEST_INPUT = "agent_chat_invariant_test_input"
+    const val INVARIANT_TEST_BUTTON = "agent_chat_invariant_test_button"
+    const val INVARIANT_EDITOR = "agent_chat_invariant_editor"
+    const val INVARIANT_LAST_CHECK = "agent_chat_invariant_last_check"
+    const val INVARIANT_SAFE_ALTERNATIVE_BUTTON = "agent_chat_invariant_safe_alternative_button"
+    const val INVARIANTS_EDITOR_TOGGLE = "agent_chat_invariants_editor_toggle"
+    const val INVARIANTS_INPUT = "agent_chat_invariants_input"
+    const val SAVE_INVARIANTS_BUTTON = "agent_chat_save_invariants_button"
     const val LONG_TERM_MEMORY_EDITOR_TOGGLE = "agent_chat_long_term_memory_editor_toggle"
     const val LONG_TERM_MEMORY_INPUT = "agent_chat_long_term_memory_input"
     const val SAVE_LONG_TERM_MEMORY_BUTTON = "agent_chat_save_long_term_memory_button"
@@ -906,6 +1497,7 @@ private const val COLLAPSED_MESSAGE_CHAR_LIMIT = 220
 private const val INPUT_MAX_LINES = 3
 private const val PROFILE_MAX_LINES = 8
 private const val TASK_CONTEXT_MAX_LINES = 8
+private const val INVARIANTS_MAX_LINES = 10
 private const val LONG_TERM_MEMORY_MAX_LINES = 10
 
 @Preview(showBackground = true, widthDp = 390, heightDp = 840)

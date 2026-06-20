@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -48,6 +49,39 @@ class AgentChatScreenTest {
         composeRule.onNodeWithTag(AgentChatTags.RUN_TASK_BUTTON).assertIsNotEnabled()
         composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput("Hello")
         composeRule.onNodeWithTag(AgentChatTags.RUN_TASK_BUTTON).assertIsEnabled()
+    }
+
+    @Test
+    fun modelMenuDispatchesModelChanged() {
+        var state by mutableStateOf(AgentChatUiState())
+        val actions = mutableListOf<AgentChatAction>()
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = state,
+                    onAction = { action ->
+                        actions += action
+                        if (action is AgentChatAction.ModelChanged) {
+                            state = state.copy(selectedModel = action.model)
+                        }
+                    },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule
+            .onNodeWithTag(AgentChatTags.MODEL_MENU_BUTTON)
+            .assertTextContains("3.5 Flash", substring = true)
+            .performClick()
+        composeRule
+            .onNodeWithTag("${AgentChatTags.MODEL_PREFIX}_${AgentChatModelOption.GEMINI_2_5_FLASH_LITE.name}")
+            .performClick()
+
+        composeRule
+            .onNodeWithTag(AgentChatTags.MODEL_MENU_BUTTON)
+            .assertTextContains("2.5 Lite", substring = true)
+        assertEquals(AgentChatAction.ModelChanged(AgentChatModelOption.GEMINI_2_5_FLASH_LITE), actions.last())
     }
 
     @Test
@@ -282,6 +316,97 @@ class AgentChatScreenTest {
         assertTrue(actions.any { it is AgentChatAction.TaskContextChanged })
         assertTrue(actions.any { it is AgentChatAction.LongTermMemoryChanged })
         assertTrue(actions.contains(AgentChatAction.SaveLongTermMemory))
+    }
+
+    @Test
+    fun invariantGuardShowsRulesTestEditorAndLastCheck() {
+        val invariantMarkdown =
+            """
+            # Invariants
+
+            Invariant: Android stack
+            Type: tech_stack
+            Severity: hard
+            Rule: Use Kotlin and Jetpack Compose.
+            Reject: React Native
+            Reason: Stack is fixed.
+            Alternative: Use Kotlin/Compose.
+            """.trimIndent()
+        var state by
+            mutableStateOf(
+                AgentChatUiState(
+                    invariants = AgentChatInvariantSet(markdown = invariantMarkdown),
+                    invariantsInput = invariantMarkdown,
+                    lastInvariantCheck =
+                        AgentChatInvariantCheckSnapshot(
+                            status = AgentChatInvariantCheckStatus.BLOCKED,
+                            stage = AgentChatInvariantCheckStage.PRE_FLIGHT,
+                            invariantTitle = "Android stack",
+                            conflict = "React Native",
+                            reason = "Stack is fixed.",
+                            alternative = "Use Kotlin/Compose.",
+                        ),
+                ),
+            )
+        val actions = mutableListOf<AgentChatAction>()
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = state,
+                    onAction = { action ->
+                        actions += action
+                        state =
+                            when (action) {
+                                is AgentChatAction.InvariantsChanged ->
+                                    state.copy(
+                                        invariants = state.invariants.copy(markdown = action.markdown),
+                                        invariantsInput = action.markdown,
+                                        isInvariantsDirty = true,
+                                    )
+                                AgentChatAction.SaveInvariants -> state.copy(isInvariantsDirty = false)
+                                is AgentChatAction.InputChanged -> state.copy(input = action.input)
+                                else -> state
+                            }
+                    },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_GUARD).assertIsDisplayed()
+        composeRule.onNodeWithText("1 rules", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Last: Blocked before Gemini", substring = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_GUARD_TOGGLE).performClick()
+
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_RULES).assertIsDisplayed()
+        composeRule.onNodeWithText("Android stack", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Reject: React Native", substring = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("${AgentChatTags.INVARIANT_TAB_PREFIX}_test").performClick()
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_TEST_INPUT).performTextInput("Build it with React Native")
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_TEST_BUTTON).performClick()
+        composeRule.onNodeWithText("Blocked").assertIsDisplayed()
+        composeRule.onNodeWithText("Conflict: React Native", substring = true).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("${AgentChatTags.INVARIANT_TAB_PREFIX}_editor").performClick()
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANTS_INPUT).performTextInput("\nInvariant: Missing rule")
+        composeRule
+            .onNodeWithTag(AgentChatTags.SAVE_INVARIANTS_BUTTON)
+            .assertIsEnabled()
+            .performClick()
+
+        composeRule.onNodeWithTag("${AgentChatTags.INVARIANT_TAB_PREFIX}_last_check").performClick()
+        composeRule.onNodeWithText("Status: Blocked before Gemini", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.INVARIANT_SAFE_ALTERNATIVE_BUTTON).performClick()
+
+        assertTrue(actions.any { it is AgentChatAction.InvariantsChanged })
+        assertTrue(actions.contains(AgentChatAction.SaveInvariants))
+        assertTrue(
+            actions
+                .filterIsInstance<AgentChatAction.InputChanged>()
+                .any { action -> action.input.contains("Kotlin/Compose") },
+        )
     }
 
     @Test

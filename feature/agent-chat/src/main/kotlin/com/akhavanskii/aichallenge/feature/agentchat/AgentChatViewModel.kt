@@ -2,6 +2,7 @@ package com.akhavanskii.aichallenge.feature.agentchat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.akhavanskii.aichallenge.core.network.AgentMessage
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.LlmAgent
 import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
@@ -27,6 +28,7 @@ class AgentChatViewModel
         private val historyStore: AgentChatHistoryStore,
         private val longTermMemoryStore: AgentChatLongTermMemoryStore,
         private val userProfileStore: AgentChatUserProfileStore,
+        private val invariantStore: AgentChatInvariantStore,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
@@ -38,6 +40,7 @@ class AgentChatViewModel
                 val snapshot = historyStore.load()
                 val longTermMemory = longTermMemoryStore.load()
                 val profileSnapshot = userProfileStore.load()
+                val invariants = invariantStore.load()
                 mutableUiState.update { current ->
                     if (current == AgentChatUiState()) {
                         val memory =
@@ -46,13 +49,17 @@ class AgentChatViewModel
                                 .withLongTermMarkdown(longTermMemory)
                         val profiles = profileSnapshot.normalized
                         current.copy(
+                            selectedModel = snapshot.selectedModel,
                             messages = snapshot.messages,
                             memory = memory,
                             taskContextInput = memory.taskContext.toEditableText(),
                             profiles = profiles.profiles,
                             activeProfileId = profiles.activeProfileId,
                             profileInput = profiles.activeProfile.toEditableText(),
+                            invariants = invariants,
+                            invariantsInput = invariants.markdown,
                             isLongTermMemoryDirty = false,
+                            isInvariantsDirty = false,
                         )
                     } else {
                         current
@@ -64,7 +71,9 @@ class AgentChatViewModel
         fun onAction(action: AgentChatAction) {
             when (action) {
                 is AgentChatAction.InputChanged -> onInputChanged(action.input)
+                is AgentChatAction.ModelChanged -> onModelChanged(action.model)
                 is AgentChatAction.LongTermMemoryChanged -> onLongTermMemoryChanged(action.markdown)
+                is AgentChatAction.InvariantsChanged -> onInvariantsChanged(action.markdown)
                 is AgentChatAction.ProfileChanged -> onProfileChanged(action.profileId)
                 is AgentChatAction.ProfileInputChanged -> onProfileInputChanged(action.input)
                 is AgentChatAction.TaskContextChanged -> onTaskContextChanged(action.input)
@@ -75,6 +84,7 @@ class AgentChatViewModel
                 AgentChatAction.ResetTask -> resetTask()
                 AgentChatAction.ResumeTask -> resumeTask()
                 AgentChatAction.RetryTask -> retryTask()
+                AgentChatAction.SaveInvariants -> saveInvariants()
                 AgentChatAction.SaveLongTermMemory -> saveLongTermMemory()
                 AgentChatAction.StartTask -> startTask()
                 AgentChatAction.Stop -> stopActiveRequest()
@@ -85,6 +95,14 @@ class AgentChatViewModel
             mutableUiState.update { current ->
                 if (current.isLoading) current else current.copy(input = input)
             }
+        }
+
+        private fun onModelChanged(model: AgentChatModelOption) {
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    if (current.isLoading) current else current.copy(selectedModel = model)
+                }
+            persistHistory(updatedState)
         }
 
         private fun onTaskContextChanged(input: String) {
@@ -111,6 +129,20 @@ class AgentChatViewModel
                                 current.memory.longTermMarkdown.copy(markdown = markdown),
                             ),
                         isLongTermMemoryDirty = true,
+                    )
+                }
+            }
+        }
+
+        private fun onInvariantsChanged(markdown: String) {
+            mutableUiState.update { current ->
+                if (current.isLoading) {
+                    current
+                } else {
+                    current.copy(
+                        invariants = current.invariants.copy(markdown = markdown),
+                        invariantsInput = markdown,
+                        isInvariantsDirty = true,
                     )
                 }
             }
@@ -173,6 +205,20 @@ class AgentChatViewModel
             }
         }
 
+        private fun saveInvariants() {
+            val invariantsToSave = mutableUiState.value.invariants
+            viewModelScope.launch {
+                invariantStore.save(invariantsToSave)
+                mutableUiState.update { current ->
+                    if (current.invariants == invariantsToSave) {
+                        current.copy(isInvariantsDirty = false)
+                    } else {
+                        current
+                    }
+                }
+            }
+        }
+
         private fun clearChat() {
             updateStateAndPersist { current ->
                 if (current.isLoading) {
@@ -211,6 +257,21 @@ class AgentChatViewModel
                 appendLocalError("Enter a task before running the pipeline.")
                 return
             }
+            val invariantCheck = AgentChatInvariantChecker.check(prompt, currentState.invariants)
+            if (invariantCheck.hasHardViolations) {
+                appendInvariantRefusal(
+                    prompt = prompt,
+                    violations = invariantCheck.hardViolations,
+                )
+                return
+            }
+            recordInvariantCheck(
+                invariantCheckSnapshot(
+                    status = AgentChatInvariantCheckStatus.PASSED,
+                    stage = AgentChatInvariantCheckStage.PRE_FLIGHT,
+                    artifactStored = false,
+                ),
+            )
 
             val transition =
                 AgentTaskStateMachine.reduce(
@@ -364,10 +425,12 @@ class AgentChatViewModel
                         latestUserMessage = prompt,
                         chatMessages = emptyList(),
                         memory = currentState.memory,
+                        invariants = currentState.invariants,
                         userProfile = currentState.activeProfile,
                         selection =
                             AgentChatMemorySelection(
                                 includeChatHistory = false,
+                                includeInvariants = true,
                                 includeTaskState = true,
                                 includeTaskContext = true,
                                 includeLongTermMarkdown = true,
@@ -382,12 +445,14 @@ class AgentChatViewModel
 
                 when (
                     val result =
-                        llmAgent.sendMessage(
-                            messages = preparedPrompt.messages,
-                            systemInstruction = preparedPrompt.systemInstruction,
+                        sendInvariantCheckedMessage(
+                            preparedPrompt = preparedPrompt,
+                            invariants = currentState.invariants,
+                            model = currentState.selectedModel,
+                            outputLabel = artifactType.title,
                         )
                 ) {
-                    is GeminiResult.Success -> {
+                    is InvariantCheckedLlmResult.Success -> {
                         if (!isCurrentRequest(requestId)) return
                         val transition =
                             AgentTaskStateMachine.reduce(
@@ -396,7 +461,7 @@ class AgentChatViewModel
                                     AgentTaskEvent.StepSucceeded(
                                         AgentTaskArtifact(
                                             type = artifactType,
-                                            text = result.value,
+                                            text = result.text,
                                         ),
                                     ),
                             )
@@ -419,9 +484,9 @@ class AgentChatViewModel
                             return
                         }
                     }
-                    is GeminiResult.Failure -> {
+                    is InvariantCheckedLlmResult.Failure -> {
                         if (!isCurrentRequest(requestId)) return
-                        failTaskStep(result.error.userMessage)
+                        failTaskStep(result.message)
                         return
                     }
                 }
@@ -461,10 +526,12 @@ class AgentChatViewModel
                             latestUserMessage = branch.buildPrompt(),
                             chatMessages = emptyList(),
                             memory = currentState.memory,
+                            invariants = currentState.invariants,
                             userProfile = currentState.activeProfile,
                             selection =
                                 AgentChatMemorySelection(
                                     includeChatHistory = false,
+                                    includeInvariants = true,
                                     includeTaskState = true,
                                     includeTaskContext = true,
                                     includeLongTermMarkdown = true,
@@ -485,24 +552,26 @@ class AgentChatViewModel
                         .map { request ->
                             async {
                                 val result =
-                                    llmAgent.sendMessage(
-                                        messages = request.preparedPrompt.messages,
-                                        systemInstruction = request.preparedPrompt.systemInstruction,
+                                    sendInvariantCheckedMessage(
+                                        preparedPrompt = request.preparedPrompt,
+                                        invariants = currentState.invariants,
+                                        model = currentState.selectedModel,
+                                        outputLabel = request.branch.expectedArtifactType.title,
                                     )
                                 when (result) {
-                                    is GeminiResult.Success ->
+                                    is InvariantCheckedLlmResult.Success ->
                                         PlanningBranchResult(
                                             branchId = request.branch.id,
                                             artifact =
                                                 AgentTaskArtifact(
                                                     type = request.branch.expectedArtifactType,
-                                                    text = result.value,
+                                                    text = result.text,
                                                 ),
                                         )
-                                    is GeminiResult.Failure ->
+                                    is InvariantCheckedLlmResult.Failure ->
                                         PlanningBranchResult(
                                             branchId = request.branch.id,
-                                            errorMessage = result.error.userMessage,
+                                            errorMessage = result.message,
                                         )
                                 }
                             }
@@ -610,6 +679,25 @@ class AgentChatViewModel
             if (!currentState.canCompareProfiles) return
 
             val prompt = currentState.input.normalizedPromptOrNull() ?: return
+            val invariantCheck = AgentChatInvariantChecker.check(prompt, currentState.invariants)
+            if (invariantCheck.hasHardViolations) {
+                recordInvariantCheck(
+                    invariantCheckSnapshot(
+                        status = AgentChatInvariantCheckStatus.BLOCKED,
+                        stage = AgentChatInvariantCheckStage.PRE_FLIGHT,
+                        violations = invariantCheck.hardViolations,
+                    ),
+                )
+                appendLocalError(AgentChatInvariantChecker.formatRefusal(invariantCheck.hardViolations))
+                return
+            }
+            recordInvariantCheck(
+                invariantCheckSnapshot(
+                    status = AgentChatInvariantCheckStatus.PASSED,
+                    stage = AgentChatInvariantCheckStage.PRE_FLIGHT,
+                    artifactStored = false,
+                ),
+            )
             val profiles = currentState.profiles.take(PROFILE_COMPARE_LIMIT)
             val updatedState =
                 mutableUiState.updateAndGet { current ->
@@ -636,35 +724,131 @@ class AgentChatViewModel
                             latestUserMessage = prompt,
                             chatMessages = updatedState.messages,
                             memory = updatedState.memory,
+                            invariants = updatedState.invariants,
                             userProfile = profile,
                             selection =
                                 AgentChatMemorySelection(
                                     includeChatHistory = true,
+                                    includeInvariants = true,
                                     includeTaskContext = true,
                                     includeLongTermMarkdown = true,
                                 ),
                         )
                     val result =
-                        llmAgent.sendMessage(
-                            messages = preparedPrompt.messages,
-                            systemInstruction = preparedPrompt.systemInstruction,
+                        sendInvariantCheckedMessage(
+                            preparedPrompt = preparedPrompt,
+                            invariants = updatedState.invariants,
+                            model = updatedState.selectedModel,
+                            outputLabel = "profile comparison result",
                         )
                     if (!isCurrentRequest(requestId)) return@launchActiveRequest
 
                     when (result) {
-                        is GeminiResult.Success ->
+                        is InvariantCheckedLlmResult.Success ->
                             replaceCompareResult(
                                 profileId = profile.id,
-                                text = result.value,
+                                text = result.text,
                             )
-                        is GeminiResult.Failure ->
+                        is InvariantCheckedLlmResult.Failure ->
                             replaceCompareResult(
                                 profileId = profile.id,
-                                text = result.error.userMessage,
+                                text = result.message,
                                 isError = true,
                             )
                     }
                 }
+            }
+        }
+
+        private suspend fun sendInvariantCheckedMessage(
+            preparedPrompt: AgentChatPreparedPrompt,
+            invariants: AgentChatInvariantSet,
+            model: AgentChatModelOption,
+            outputLabel: String,
+        ): InvariantCheckedLlmResult {
+            val promptLayerIncluded = preparedPrompt.requestContext.includedLayers.contains(AgentChatMemoryLayer.INVARIANTS)
+            val firstResult =
+                llmAgent.sendMessage(
+                    messages = preparedPrompt.messages,
+                    systemInstruction = preparedPrompt.systemInstruction,
+                    modelName = model.modelName,
+                )
+            val firstText =
+                when (firstResult) {
+                    is GeminiResult.Success -> firstResult.value
+                    is GeminiResult.Failure -> return InvariantCheckedLlmResult.Failure(firstResult.error.userMessage)
+                }
+            val firstCheck = AgentChatInvariantChecker.check(firstText, invariants)
+            if (!firstCheck.hasHardViolations) {
+                recordInvariantCheck(
+                    invariantCheckSnapshot(
+                        status = AgentChatInvariantCheckStatus.PASSED,
+                        stage = AgentChatInvariantCheckStage.MODEL_OUTPUT,
+                        artifactStored = true,
+                        promptLayerIncluded = promptLayerIncluded,
+                    ),
+                )
+                return InvariantCheckedLlmResult.Success(firstText)
+            }
+
+            val repairResult =
+                llmAgent.sendMessage(
+                    messages =
+                        preparedPrompt.messages +
+                            AgentMessage.Model(firstText) +
+                            AgentMessage.User(
+                                AgentChatInvariantChecker.buildRepairPrompt(
+                                    violations = firstCheck.hardViolations,
+                                    outputLabel = outputLabel,
+                                ),
+                            ),
+                    systemInstruction = preparedPrompt.systemInstruction,
+                    modelName = model.modelName,
+                )
+            val repairedText =
+                when (repairResult) {
+                    is GeminiResult.Success -> repairResult.value
+                    is GeminiResult.Failure -> {
+                        recordInvariantCheck(
+                            invariantCheckSnapshot(
+                                status = AgentChatInvariantCheckStatus.FAILED,
+                                stage = AgentChatInvariantCheckStage.REPAIR,
+                                violations = firstCheck.hardViolations,
+                                repairAttempted = true,
+                                artifactStored = false,
+                                promptLayerIncluded = promptLayerIncluded,
+                            ),
+                        )
+                        return InvariantCheckedLlmResult.Failure(repairResult.error.userMessage)
+                    }
+                }
+            val repairedCheck = AgentChatInvariantChecker.check(repairedText, invariants)
+            return if (repairedCheck.hasHardViolations) {
+                recordInvariantCheck(
+                    invariantCheckSnapshot(
+                        status = AgentChatInvariantCheckStatus.FAILED,
+                        stage = AgentChatInvariantCheckStage.REPAIR,
+                        violations = repairedCheck.hardViolations,
+                        repairAttempted = true,
+                        artifactStored = false,
+                        promptLayerIncluded = promptLayerIncluded,
+                    ),
+                )
+                InvariantCheckedLlmResult.Failure(
+                    AgentChatInvariantChecker.formatOutputFailure(repairedCheck.hardViolations),
+                )
+            } else {
+                recordInvariantCheck(
+                    invariantCheckSnapshot(
+                        status = AgentChatInvariantCheckStatus.REPAIRED,
+                        stage = AgentChatInvariantCheckStage.REPAIR,
+                        violations = firstCheck.hardViolations,
+                        repairAttempted = true,
+                        artifactStored = true,
+                        promptLayerIncluded = promptLayerIncluded,
+                    ),
+                )
+                InvariantCheckedLlmResult.Success(repairedText)
             }
         }
 
@@ -764,6 +948,71 @@ class AgentChatViewModel
             }
         }
 
+        private fun recordInvariantCheck(snapshot: AgentChatInvariantCheckSnapshot) {
+            mutableUiState.update { state ->
+                if (
+                    snapshot.status == AgentChatInvariantCheckStatus.PASSED &&
+                    snapshot.stage == AgentChatInvariantCheckStage.MODEL_OUTPUT &&
+                    state.lastInvariantCheck.status == AgentChatInvariantCheckStatus.REPAIRED
+                ) {
+                    state
+                } else {
+                    state.copy(lastInvariantCheck = snapshot)
+                }
+            }
+        }
+
+        private fun invariantCheckSnapshot(
+            status: AgentChatInvariantCheckStatus,
+            stage: AgentChatInvariantCheckStage,
+            violations: List<AgentChatInvariantViolation> = emptyList(),
+            repairAttempted: Boolean = false,
+            artifactStored: Boolean = false,
+            promptLayerIncluded: Boolean = false,
+        ): AgentChatInvariantCheckSnapshot {
+            val violation = violations.firstOrNull()
+            val invariant = violation?.invariant
+            return AgentChatInvariantCheckSnapshot(
+                status = status,
+                stage = stage,
+                invariantTitle = invariant?.title.orEmpty(),
+                conflict = violation?.matchedText.orEmpty(),
+                reason = invariant?.reason.orEmpty(),
+                alternative = invariant?.alternative.orEmpty(),
+                repairAttempted = repairAttempted,
+                artifactStored = artifactStored,
+                promptLayerIncluded = promptLayerIncluded,
+            )
+        }
+
+        private fun appendInvariantRefusal(
+            prompt: String,
+            violations: List<AgentChatInvariantViolation>,
+        ) {
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(
+                        input = "",
+                        lastInvariantCheck =
+                            invariantCheckSnapshot(
+                                status = AgentChatInvariantCheckStatus.BLOCKED,
+                                stage = AgentChatInvariantCheckStage.PRE_FLIGHT,
+                                violations = violations,
+                                artifactStored = false,
+                            ),
+                        messages =
+                            state.messages +
+                                AgentChatMessage(role = AgentChatRole.USER, text = prompt) +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = AgentChatInvariantChecker.formatRefusal(violations),
+                                    isError = true,
+                                ),
+                    )
+                }
+            persistHistory(updatedState)
+        }
+
         private fun persistHistory(state: AgentChatUiState) {
             viewModelScope.launch {
                 historyStore.save(state.toHistorySnapshot())
@@ -798,6 +1047,7 @@ class AgentChatViewModel
 
         private fun AgentChatUiState.toHistorySnapshot(): AgentChatHistorySnapshot =
             AgentChatHistorySnapshot(
+                selectedModel = selectedModel,
                 messages = messages.filterNot { it.isLoading },
                 memory = memory,
             )
@@ -820,6 +1070,16 @@ class AgentChatViewModel
             val branch: AgentTaskBranch,
             val preparedPrompt: AgentChatPreparedPrompt,
         )
+
+        private sealed interface InvariantCheckedLlmResult {
+            data class Success(
+                val text: String,
+            ) : InvariantCheckedLlmResult
+
+            data class Failure(
+                val message: String,
+            ) : InvariantCheckedLlmResult
+        }
 
         private data class PlanningBranchResult(
             val branchId: AgentTaskBranchId,

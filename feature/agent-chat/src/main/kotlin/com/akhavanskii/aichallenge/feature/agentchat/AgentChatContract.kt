@@ -5,14 +5,19 @@ import com.akhavanskii.aichallenge.core.mvvm.UiState
 
 data class AgentChatUiState(
     val input: String = "",
+    val selectedModel: AgentChatModelOption = AgentChatModelOption.DEFAULT,
     val messages: List<AgentChatMessage> = emptyList(),
     val memory: AgentChatMemorySnapshot = AgentChatMemorySnapshot(),
     val taskContextInput: String = AgentChatTaskContext().toEditableText(),
     val profiles: List<AgentChatUserProfile> = AgentChatProfileCatalog.defaults,
     val activeProfileId: String = SENIOR_KOTLIN_PROFILE_ID,
     val profileInput: String = AgentChatProfileCatalog.defaults.first { it.id == SENIOR_KOTLIN_PROFILE_ID }.toEditableText(),
+    val invariants: AgentChatInvariantSet = AgentChatInvariantSet(),
+    val invariantsInput: String = AgentChatInvariantSet().markdown,
+    val lastInvariantCheck: AgentChatInvariantCheckSnapshot = AgentChatInvariantCheckSnapshot(),
     val compareResults: List<AgentChatProfileCompareResult> = emptyList(),
     val isLongTermMemoryDirty: Boolean = false,
+    val isInvariantsDirty: Boolean = false,
 ) : UiState {
     val isLoading: Boolean
         get() =
@@ -47,6 +52,9 @@ data class AgentChatUiState(
     val canSaveLongTermMemory: Boolean
         get() = isLongTermMemoryDirty && !isLoading
 
+    val canSaveInvariants: Boolean
+        get() = isInvariantsDirty && !isLoading
+
     val canClearTaskContext: Boolean
         get() = memory.taskContext.itemCount > 0 && !isLoading
 
@@ -54,6 +62,77 @@ data class AgentChatUiState(
         get() =
             profiles.firstOrNull { it.id == activeProfileId }
                 ?: AgentChatProfileCatalog.defaults.first { it.id == SENIOR_KOTLIN_PROFILE_ID }
+}
+
+enum class AgentChatModelOption(
+    val modelName: String,
+    val title: String,
+    val compactTitle: String,
+    val description: String,
+) {
+    GEMINI_3_5_FLASH(
+        modelName = "gemini-3.5-flash",
+        title = "Gemini 3.5 Flash",
+        compactTitle = "3.5 Flash",
+        description = "Default project model; keeps Agent Chat behavior aligned with the app endpoint.",
+    ),
+    GEMINI_2_5_FLASH(
+        modelName = "gemini-2.5-flash",
+        title = "Gemini 2.5 Flash",
+        compactTitle = "2.5 Flash",
+        description = "Balanced Gemini model for everyday reasoning and implementation tasks.",
+    ),
+    GEMINI_2_5_FLASH_LITE(
+        modelName = "gemini-2.5-flash-lite",
+        title = "Gemini 2.5 Flash-Lite",
+        compactTitle = "2.5 Lite",
+        description = "Lower-latency Gemini model for simpler or more iterative tasks.",
+    ),
+    ;
+
+    companion object {
+        val DEFAULT: AgentChatModelOption = GEMINI_3_5_FLASH
+
+        fun fromModelName(modelName: String?): AgentChatModelOption = entries.firstOrNull { it.modelName == modelName } ?: DEFAULT
+    }
+}
+
+data class AgentChatInvariantCheckSnapshot(
+    val status: AgentChatInvariantCheckStatus = AgentChatInvariantCheckStatus.NOT_RUN,
+    val stage: AgentChatInvariantCheckStage = AgentChatInvariantCheckStage.NONE,
+    val invariantTitle: String = "",
+    val conflict: String = "",
+    val reason: String = "",
+    val alternative: String = "",
+    val repairAttempted: Boolean = false,
+    val artifactStored: Boolean = false,
+    val promptLayerIncluded: Boolean = false,
+) {
+    val safeAlternativePrompt: String
+        get() =
+            alternative
+                .takeIf { it.isNotBlank() }
+                ?.let { "Please solve the request within this invariant-safe alternative: $it" }
+                .orEmpty()
+}
+
+enum class AgentChatInvariantCheckStatus(
+    val title: String,
+) {
+    NOT_RUN("Not run"),
+    PASSED("Passed"),
+    BLOCKED("Blocked before Gemini"),
+    REPAIRED("Repaired once"),
+    FAILED("Failed after repair"),
+}
+
+enum class AgentChatInvariantCheckStage(
+    val title: String,
+) {
+    NONE("No check yet"),
+    PRE_FLIGHT("Pre-flight"),
+    MODEL_OUTPUT("Model output"),
+    REPAIR("Repair"),
 }
 
 data class AgentChatProfileCompareResult(
@@ -81,11 +160,19 @@ sealed interface AgentChatAction : UiEvent {
         val input: String,
     ) : AgentChatAction
 
+    data class ModelChanged(
+        val model: AgentChatModelOption,
+    ) : AgentChatAction
+
     data class TaskContextChanged(
         val input: String,
     ) : AgentChatAction
 
     data class LongTermMemoryChanged(
+        val markdown: String,
+    ) : AgentChatAction
+
+    data class InvariantsChanged(
         val markdown: String,
     ) : AgentChatAction
 
@@ -114,6 +201,8 @@ sealed interface AgentChatAction : UiEvent {
     data object ClearTaskContext : AgentChatAction
 
     data object SaveLongTermMemory : AgentChatAction
+
+    data object SaveInvariants : AgentChatAction
 
     data object Stop : AgentChatAction
 }
