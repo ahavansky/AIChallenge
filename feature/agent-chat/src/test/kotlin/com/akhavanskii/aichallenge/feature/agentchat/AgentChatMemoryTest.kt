@@ -128,6 +128,36 @@ class AgentChatMemoryTest {
     }
 
     @Test
+    fun promptBuilderIncludesFormalTaskStateBeforeTaskContext() {
+        val taskState =
+            AgentTaskStateMachine
+                .reduce(
+                    state = AgentTaskState(),
+                    event = AgentTaskEvent.Start(taskId = "task-1", prompt = "Build feature"),
+                ).state
+        val prepared =
+            AgentChatMemoryPromptBuilder.build(
+                latestUserMessage = "Continue",
+                chatMessages = emptyList(),
+                memory =
+                    AgentChatMemorySnapshot(
+                        taskState = taskState,
+                        taskContext = AgentChatTaskContext(stage = "legacy editable stage"),
+                    ),
+            )
+
+        assertEquals(
+            listOf(
+                AgentChatMemoryLayer.TASK_STATE,
+                AgentChatMemoryLayer.TASK_CONTEXT,
+            ),
+            prepared.requestContext.includedLayers,
+        )
+        assertTrue((prepared.messages[0] as AgentMessage.User).text.contains("Formal task state"))
+        assertTrue((prepared.messages[1] as AgentMessage.User).text.contains("TaskContext"))
+    }
+
+    @Test
     fun promptBuilderShowsHowSourcesChangePrompt() {
         val basePrompt =
             AgentChatMemoryPromptBuilder.build(

@@ -91,16 +91,6 @@ fun AgentChatScreen(
                 }
             }
 
-            ConversationHistory(
-                messages = state.messages,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            ProfileCompareResults(
-                results = state.compareResults,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
             MemoryLayersSummary(
                 messages = state.messages,
                 memory = state.memory,
@@ -120,6 +110,29 @@ fun AgentChatScreen(
                 onLongTermMemoryChanged = { onAction(AgentChatAction.LongTermMemoryChanged(it)) },
                 onSaveLongTermMemory = { onAction(AgentChatAction.SaveLongTermMemory) },
                 onClearTaskContext = { onAction(AgentChatAction.ClearTaskContext) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            TaskStatePanel(
+                taskState = state.memory.taskState,
+                canPauseTask = state.canPauseTask,
+                canResumeTask = state.canResumeTask,
+                canRetryTask = state.canRetryTask,
+                canResetTask = state.canResetTask,
+                onPauseTask = { onAction(AgentChatAction.PauseTask) },
+                onResumeTask = { onAction(AgentChatAction.ResumeTask) },
+                onRetryTask = { onAction(AgentChatAction.RetryTask) },
+                onResetTask = { onAction(AgentChatAction.ResetTask) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            ConversationHistory(
+                messages = state.messages,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            ProfileCompareResults(
+                results = state.compareResults,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -150,11 +163,11 @@ fun AgentChatScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             ChallengeButton(
-                onClick = { onAction(AgentChatAction.Submit) },
-                enabled = state.canSend,
-                modifier = Modifier.testTag(AgentChatTags.SEND_BUTTON),
+                onClick = { onAction(AgentChatAction.StartTask) },
+                enabled = state.canRunTask,
+                modifier = Modifier.testTag(AgentChatTags.RUN_TASK_BUTTON),
             ) {
-                Text("Send")
+                Text("Run task")
             }
             TextButton(
                 onClick = { onAction(AgentChatAction.ClearChat) },
@@ -169,6 +182,179 @@ fun AgentChatScreen(
                 modifier = Modifier.testTag(AgentChatTags.STOP_BUTTON),
             ) {
                 Text("Stop")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TaskStatePanel(
+    taskState: AgentTaskState,
+    canPauseTask: Boolean,
+    canResumeTask: Boolean,
+    canRetryTask: Boolean,
+    canResetTask: Boolean,
+    onPauseTask: () -> Unit,
+    onResumeTask: () -> Unit,
+    onRetryTask: () -> Unit,
+    onResetTask: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var artifactsExpanded by remember(taskState.taskId, taskState.artifacts.size) { mutableStateOf(false) }
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.TASK_STATE),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "Task state",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                AgentTaskStage.entries.forEach { stage ->
+                    val isReached = taskState.hasActiveTask && stage.ordinal <= taskState.stage.ordinal
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color =
+                            if (isReached) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                    ) {
+                        Text(
+                            text = stage.title,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color =
+                                if (isReached) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                        )
+                    }
+                }
+            }
+            Text(
+                text = taskState.formatDebugDetails(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (taskState.branches.isNotEmpty()) {
+                FlowRow(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .testTag(AgentChatTags.TASK_BRANCHES),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    taskState.branches.forEach { branch ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = branch.status.containerColor(),
+                        ) {
+                            Text(
+                                text = "${branch.id.title}: ${branch.status.title}",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = branch.status.contentColor(),
+                            )
+                        }
+                    }
+                }
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = onPauseTask,
+                    enabled = canPauseTask,
+                    modifier = Modifier.testTag(AgentChatTags.PAUSE_TASK_BUTTON),
+                ) {
+                    Text("Pause task")
+                }
+                TextButton(
+                    onClick = onResumeTask,
+                    enabled = canResumeTask,
+                    modifier = Modifier.testTag(AgentChatTags.RESUME_TASK_BUTTON),
+                ) {
+                    Text("Continue task")
+                }
+                TextButton(
+                    onClick = onRetryTask,
+                    enabled = canRetryTask,
+                    modifier = Modifier.testTag(AgentChatTags.RETRY_TASK_BUTTON),
+                ) {
+                    Text("Retry step")
+                }
+                TextButton(
+                    onClick = onResetTask,
+                    enabled = canResetTask,
+                    modifier = Modifier.testTag(AgentChatTags.RESET_TASK_BUTTON),
+                ) {
+                    Text("Reset task")
+                }
+            }
+            if (taskState.artifacts.isNotEmpty()) {
+                TextButton(
+                    onClick = { artifactsExpanded = !artifactsExpanded },
+                    modifier = Modifier.testTag(AgentChatTags.TASK_ARTIFACTS_TOGGLE),
+                ) {
+                    Text(if (artifactsExpanded) "Hide artifacts" else "Show artifacts")
+                }
+            }
+            if (artifactsExpanded) {
+                Column(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .testTag(AgentChatTags.TASK_ARTIFACTS),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    taskState.artifacts.forEach { artifact ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = artifact.type.title,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                ChallengeMarkdownText(
+                                    text = artifact.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = COLLAPSED_ARTIFACT_LINES,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -197,6 +383,7 @@ private fun MemoryLayersSummary(
     onClearTaskContext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isExpanded by remember { mutableStateOf(false) }
     var isProfileEditorVisible by remember { mutableStateOf(false) }
     var isTaskContextEditorVisible by remember { mutableStateOf(false) }
     var isLongTermMemoryEditorVisible by remember { mutableStateOf(false) }
@@ -213,158 +400,238 @@ private fun MemoryLayersSummary(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Text(
-                text = "Memory layers",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            FlowRow(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                ProfileMenu(
-                    profiles = profiles,
-                    activeProfile = activeProfile,
-                    enabled = enabled,
-                    onSelected = onProfileSelected,
+                Text(
+                    text = "Memory layers",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
-                TextButton(
-                    onClick = { isProfileEditorVisible = !isProfileEditorVisible },
-                    enabled = enabled,
-                    modifier = Modifier.testTag(AgentChatTags.PROFILE_EDITOR_TOGGLE),
-                ) {
-                    Text(if (isProfileEditorVisible) "Hide profile" else "Edit profile")
-                }
-                TextButton(
-                    onClick = onCompareProfiles,
-                    enabled = canCompareProfiles,
-                    modifier = Modifier.testTag(AgentChatTags.COMPARE_PROFILES_BUTTON),
-                ) {
-                    Text("Compare profiles")
-                }
-                TextButton(
-                    onClick = { isTaskContextEditorVisible = !isTaskContextEditorVisible },
-                    enabled = enabled,
-                    modifier = Modifier.testTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE),
-                ) {
-                    Text(if (isTaskContextEditorVisible) "Hide TaskContext" else "Edit TaskContext")
-                }
-                TextButton(
-                    onClick = { isLongTermMemoryEditorVisible = !isLongTermMemoryEditorVisible },
-                    enabled = enabled,
-                    modifier = Modifier.testTag(AgentChatTags.LONG_TERM_MEMORY_EDITOR_TOGGLE),
-                ) {
-                    Text(if (isLongTermMemoryEditorVisible) "Hide memory.md" else "Edit memory.md")
-                }
-            }
-            Text(
-                text = memory.formatDebugDetails(messages, activeProfile = activeProfile),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (isProfileEditorVisible) {
-                OutlinedTextField(
-                    value = profileInput,
-                    onValueChange = onProfileInputChanged,
-                    enabled = enabled,
+                Text(
+                    text = " · ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text =
+                        memory.formatCompactMemoryDetails(
+                            activeProfile = activeProfile,
+                            isLongTermMemoryDirty = isLongTermMemoryDirty,
+                        ),
                     modifier =
                         Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 120.dp)
-                            .testTag(AgentChatTags.PROFILE_INPUT),
-                    label = { Text("User profile", style = MaterialTheme.typography.labelSmall) },
-                    minLines = 5,
-                    maxLines = PROFILE_MAX_LINES,
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    shape = RoundedCornerShape(8.dp),
-                    colors =
-                        OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
+                            .weight(1f)
+                            .padding(end = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-            if (isTaskContextEditorVisible) {
-                OutlinedTextField(
-                    value = taskContextInput,
-                    onValueChange = onTaskContextChanged,
-                    enabled = enabled,
+                Text(
+                    text = if (isExpanded) "Hide" else "Details",
                     modifier =
                         Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 96.dp)
-                            .testTag(AgentChatTags.TASK_CONTEXT_INPUT),
-                    label = { Text("TaskContext", style = MaterialTheme.typography.labelSmall) },
-                    minLines = 4,
-                    maxLines = TASK_CONTEXT_MAX_LINES,
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    shape = RoundedCornerShape(8.dp),
-                    colors =
-                        OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                )
-                TextButton(
-                    onClick = onClearTaskContext,
-                    enabled = canClearTaskContext,
-                    modifier = Modifier.testTag(AgentChatTags.CLEAR_TASK_CONTEXT_BUTTON),
-                ) {
-                    Text("Clear task")
-                }
-            }
-            if (isLongTermMemoryEditorVisible) {
-                OutlinedTextField(
-                    value = memory.longTermMarkdown.markdown,
-                    onValueChange = onLongTermMemoryChanged,
-                    enabled = enabled,
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 132.dp)
-                            .testTag(AgentChatTags.LONG_TERM_MEMORY_INPUT),
-                    label = {
-                        Text(
-                            text = memory.longTermMarkdown.fileName,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    },
-                    minLines = 5,
-                    maxLines = LONG_TERM_MEMORY_MAX_LINES,
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    shape = RoundedCornerShape(8.dp),
-                    colors =
-                        OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
+                            .clickable { isExpanded = !isExpanded }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag(AgentChatTags.MEMORY_LAYERS_TOGGLE),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
-            if (isLongTermMemoryEditorVisible || isLongTermMemoryDirty) {
-                Row(
+            if (isExpanded) {
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    ChallengeButton(
-                        onClick = onSaveLongTermMemory,
-                        enabled = canSaveLongTermMemory,
-                        modifier = Modifier.testTag(AgentChatTags.SAVE_LONG_TERM_MEMORY_BUTTON),
-                    ) {
-                        Text("Save memory.md")
-                    }
-                    Text(
-                        text = if (isLongTermMemoryDirty) "Unsaved" else "Saved",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ProfileMenu(
+                        profiles = profiles,
+                        activeProfile = activeProfile,
+                        enabled = enabled,
+                        onSelected = onProfileSelected,
                     )
+                    TextButton(
+                        onClick = { isProfileEditorVisible = !isProfileEditorVisible },
+                        enabled = enabled,
+                        modifier = Modifier.testTag(AgentChatTags.PROFILE_EDITOR_TOGGLE),
+                    ) {
+                        Text(if (isProfileEditorVisible) "Hide profile" else "Edit profile")
+                    }
+                    TextButton(
+                        onClick = onCompareProfiles,
+                        enabled = canCompareProfiles,
+                        modifier = Modifier.testTag(AgentChatTags.COMPARE_PROFILES_BUTTON),
+                    ) {
+                        Text("Compare profiles")
+                    }
+                    TextButton(
+                        onClick = { isTaskContextEditorVisible = !isTaskContextEditorVisible },
+                        enabled = enabled,
+                        modifier = Modifier.testTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE),
+                    ) {
+                        Text(if (isTaskContextEditorVisible) "Hide TaskContext" else "Edit TaskContext")
+                    }
+                    TextButton(
+                        onClick = { isLongTermMemoryEditorVisible = !isLongTermMemoryEditorVisible },
+                        enabled = enabled,
+                        modifier = Modifier.testTag(AgentChatTags.LONG_TERM_MEMORY_EDITOR_TOGGLE),
+                    ) {
+                        Text(if (isLongTermMemoryEditorVisible) "Hide memory.md" else "Edit memory.md")
+                    }
+                }
+                Text(
+                    text = memory.formatDebugDetails(messages, activeProfile = activeProfile),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (isProfileEditorVisible) {
+                    OutlinedTextField(
+                        value = profileInput,
+                        onValueChange = onProfileInputChanged,
+                        enabled = enabled,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp)
+                                .testTag(AgentChatTags.PROFILE_INPUT),
+                        label = { Text("User profile", style = MaterialTheme.typography.labelSmall) },
+                        minLines = 5,
+                        maxLines = PROFILE_MAX_LINES,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        shape = RoundedCornerShape(8.dp),
+                        colors =
+                            OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                    )
+                }
+                if (isTaskContextEditorVisible) {
+                    OutlinedTextField(
+                        value = taskContextInput,
+                        onValueChange = onTaskContextChanged,
+                        enabled = enabled,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 96.dp)
+                                .testTag(AgentChatTags.TASK_CONTEXT_INPUT),
+                        label = { Text("TaskContext", style = MaterialTheme.typography.labelSmall) },
+                        minLines = 4,
+                        maxLines = TASK_CONTEXT_MAX_LINES,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        shape = RoundedCornerShape(8.dp),
+                        colors =
+                            OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                    )
+                    TextButton(
+                        onClick = onClearTaskContext,
+                        enabled = canClearTaskContext,
+                        modifier = Modifier.testTag(AgentChatTags.CLEAR_TASK_CONTEXT_BUTTON),
+                    ) {
+                        Text("Clear task")
+                    }
+                }
+                if (isLongTermMemoryEditorVisible) {
+                    OutlinedTextField(
+                        value = memory.longTermMarkdown.markdown,
+                        onValueChange = onLongTermMemoryChanged,
+                        enabled = enabled,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 132.dp)
+                                .testTag(AgentChatTags.LONG_TERM_MEMORY_INPUT),
+                        label = {
+                            Text(
+                                text = memory.longTermMarkdown.fileName,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        },
+                        minLines = 5,
+                        maxLines = LONG_TERM_MEMORY_MAX_LINES,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        shape = RoundedCornerShape(8.dp),
+                        colors =
+                            OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                    )
+                }
+                if (isLongTermMemoryEditorVisible || isLongTermMemoryDirty) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ChallengeButton(
+                            onClick = onSaveLongTermMemory,
+                            enabled = canSaveLongTermMemory,
+                            modifier = Modifier.testTag(AgentChatTags.SAVE_LONG_TERM_MEMORY_BUTTON),
+                        ) {
+                            Text("Save memory.md")
+                        }
+                        Text(
+                            text = if (isLongTermMemoryDirty) "Unsaved" else "Saved",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private fun AgentChatMemorySnapshot.formatCompactMemoryDetails(
+    activeProfile: AgentChatUserProfile,
+    isLongTermMemoryDirty: Boolean,
+): String {
+    val lastRequestLayers =
+        lastRequest
+            ?.includedLayers
+            ?.joinToString(separator = ", ") { it.title }
+            ?.ifBlank { "latest message only" }
+            ?: "no request yet"
+    return buildString {
+        append("Profile: ${activeProfile.title}")
+        if (taskState.hasActiveTask) {
+            append(" · Task: ${taskState.stage.title}/${taskState.status.title}")
+        }
+        append(" · Prompt: $lastRequestLayers")
+        if (isLongTermMemoryDirty) {
+            append(" · memory.md unsaved")
+        }
+    }
+}
+
+@Composable
+private fun AgentTaskBranchStatus.containerColor() =
+    when (this) {
+        AgentTaskBranchStatus.PENDING -> MaterialTheme.colorScheme.surface
+        AgentTaskBranchStatus.RUNNING -> MaterialTheme.colorScheme.primaryContainer
+        AgentTaskBranchStatus.PAUSED -> MaterialTheme.colorScheme.secondaryContainer
+        AgentTaskBranchStatus.DONE -> MaterialTheme.colorScheme.tertiaryContainer
+        AgentTaskBranchStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
+    }
+
+@Composable
+private fun AgentTaskBranchStatus.contentColor() =
+    when (this) {
+        AgentTaskBranchStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+        AgentTaskBranchStatus.RUNNING -> MaterialTheme.colorScheme.onPrimaryContainer
+        AgentTaskBranchStatus.PAUSED -> MaterialTheme.colorScheme.onSecondaryContainer
+        AgentTaskBranchStatus.DONE -> MaterialTheme.colorScheme.onTertiaryContainer
+        AgentTaskBranchStatus.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+    }
 
 @Composable
 private fun ProfileMenu(
@@ -599,13 +866,22 @@ private fun ChatMessagePanel(
 object AgentChatTags {
     const val BACK_BUTTON = "agent_chat_back_button"
     const val INPUT = "agent_chat_input"
-    const val SEND_BUTTON = "agent_chat_send_button"
+    const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
+    const val TASK_STATE = "agent_chat_task_state"
+    const val PAUSE_TASK_BUTTON = "agent_chat_pause_task_button"
+    const val RESUME_TASK_BUTTON = "agent_chat_resume_task_button"
+    const val RETRY_TASK_BUTTON = "agent_chat_retry_task_button"
+    const val RESET_TASK_BUTTON = "agent_chat_reset_task_button"
+    const val TASK_BRANCHES = "agent_chat_task_branches"
+    const val TASK_ARTIFACTS_TOGGLE = "agent_chat_task_artifacts_toggle"
+    const val TASK_ARTIFACTS = "agent_chat_task_artifacts"
     const val COMPARE_PROFILES_BUTTON = "agent_chat_compare_profiles_button"
     const val HISTORY = "agent_chat_history"
     const val MESSAGE = "agent_chat_message"
     const val MEMORY_LAYERS = "agent_chat_memory_layers"
+    const val MEMORY_LAYERS_TOGGLE = "agent_chat_memory_layers_toggle"
     const val PROFILE_MENU_BUTTON = "agent_chat_profile_menu_button"
     const val PROFILE_PREFIX = "agent_chat_profile"
     const val PROFILE_EDITOR_TOGGLE = "agent_chat_profile_editor_toggle"
@@ -624,6 +900,7 @@ private fun String.shouldCollapse(): Boolean =
     lineSequence().count() > COLLAPSED_MESSAGE_BODY_LINES || length > COLLAPSED_MESSAGE_CHAR_LIMIT
 
 private const val COLLAPSED_MESSAGE_BODY_LINES = 4
+private const val COLLAPSED_ARTIFACT_LINES = 3
 private const val COLLAPSED_PROFILE_COMPARE_LINES = 3
 private const val COLLAPSED_MESSAGE_CHAR_LIMIT = 220
 private const val INPUT_MAX_LINES = 3

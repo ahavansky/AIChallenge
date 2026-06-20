@@ -12,7 +12,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -23,84 +22,19 @@ class AgentChatViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun inputChangedEnablesSend() {
+    fun inputChangedEnablesRunTask() {
         val viewModel = createViewModel()
 
         viewModel.onAction(AgentChatAction.InputChanged("Hello"))
 
         assertEquals("Hello", viewModel.uiState.value.input)
-        assertTrue(viewModel.uiState.value.canSend)
+        assertTrue(viewModel.uiState.value.canRunTask)
     }
 
     @Test
-    fun submitSendsFirstUserMessageWithProfileInstructionAndShowsResponse() =
+    fun runTaskUsesTaskContextLongTermMarkdownAndProfileInPrompt() =
         runTest {
-            val response = CompletableDeferred<AgentResult<String>>()
-            val fakeAgent = FakeLlmAgent(results = ArrayDeque(listOf(response)))
-            val viewModel = createViewModel(fakeAgent)
-            viewModel.onAction(AgentChatAction.InputChanged("  Hello\nGemini  "))
-
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-
-            assertEquals("", viewModel.uiState.value.input)
-            assertFalse(viewModel.uiState.value.canSend)
-            assertEquals(listOf(AgentMessage.User("Hello Gemini")), fakeAgent.calls.single().messages)
-            assertTrue(
-                fakeAgent.calls
-                    .single()
-                    .systemInstruction
-                    ?.contains("Senior Kotlin developer") == true,
-            )
-            assertNull(fakeAgent.calls.single().modelName)
-            assertNull(fakeAgent.calls.single().totalTokenLimit)
-            assertEquals(
-                listOf(
-                    AgentChatMessage(role = AgentChatRole.USER, text = "Hello Gemini"),
-                    AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting for Gemini", isLoading = true),
-                ),
-                viewModel.uiState.value.messages,
-            )
-
-            response.complete(GeminiResult.Success("Answer"))
-            runCurrent()
-
-            assertEquals(
-                listOf(
-                    AgentChatMessage(role = AgentChatRole.USER, text = "Hello Gemini"),
-                    AgentChatMessage(role = AgentChatRole.MODEL, text = "Answer"),
-                ),
-                viewModel.uiState.value.messages,
-            )
-        }
-
-    @Test
-    fun submitSendsAccumulatedSuccessfulHistory() =
-        runTest {
-            val fakeAgent = FakeLlmAgent()
-            val viewModel = createViewModel(fakeAgent)
-
-            viewModel.onAction(AgentChatAction.InputChanged("First"))
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-            viewModel.onAction(AgentChatAction.InputChanged("Second"))
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-
-            assertEquals(
-                listOf(
-                    AgentMessage.User("First"),
-                    AgentMessage.Model("Answer"),
-                    AgentMessage.User("Second"),
-                ),
-                fakeAgent.calls[1].messages,
-            )
-        }
-
-    @Test
-    fun submitUsesTaskContextAndLongTermMarkdownInPrompt() =
-        runTest {
-            val fakeAgent = FakeLlmAgent()
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
             val historyStore = FakeAgentChatHistoryStore()
             val longTermMemoryStore =
                 FakeAgentChatLongTermMemoryStore(
@@ -131,7 +65,7 @@ class AgentChatViewModelTest {
                 ),
             )
             viewModel.onAction(AgentChatAction.InputChanged("Create the plan"))
-            viewModel.onAction(AgentChatAction.Submit)
+            viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
 
             val memory = viewModel.uiState.value.memory
@@ -141,6 +75,7 @@ class AgentChatViewModelTest {
             assertEquals(
                 listOf(
                     AgentChatMemoryLayer.USER_PROFILE,
+                    AgentChatMemoryLayer.TASK_STATE,
                     AgentChatMemoryLayer.LONG_TERM_MARKDOWN,
                     AgentChatMemoryLayer.TASK_CONTEXT,
                 ),
@@ -148,26 +83,33 @@ class AgentChatViewModelTest {
             )
             assertTrue(
                 fakeAgent.calls
-                    .single()
+                    .first()
                     .systemInstruction
                     ?.contains("Senior Kotlin developer") == true,
             )
-            assertTrue((fakeAgent.calls.single().messages[0] as AgentMessage.User).text.contains("Answer with concise Kotlin examples"))
-            assertTrue((fakeAgent.calls.single().messages[1] as AgentMessage.User).text.contains("TaskContext"))
-            assertEquals(
-                AgentMessage.User("Create the plan"),
-                fakeAgent.calls
-                    .single()
-                    .messages
-                    .last(),
+            val firstPromptMessages = fakeAgent.calls.first().messages
+            assertTrue(
+                firstPromptMessages.any { message ->
+                    message is AgentMessage.User && message.text.contains("Formal task state")
+                },
+            )
+            assertTrue(
+                firstPromptMessages.any { message ->
+                    message is AgentMessage.User && message.text.contains("Answer with concise Kotlin examples")
+                },
+            )
+            assertTrue(
+                firstPromptMessages.any { message ->
+                    message is AgentMessage.User && message.text.contains("TaskContext")
+                },
             )
             assertEquals(memory.taskContext, historyStore.snapshot.memory.taskContext)
         }
 
     @Test
-    fun profileSelectionPersistsAndSubmitUsesActiveProfileSystemInstruction() =
+    fun profileSelectionPersistsAndRunTaskUsesActiveProfileSystemInstruction() =
         runTest {
-            val fakeAgent = FakeLlmAgent()
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
             val profileStore = FakeAgentChatUserProfileStore()
             val viewModel = createViewModel(fakeAgent = fakeAgent, userProfileStore = profileStore)
             runCurrent()
@@ -175,29 +117,64 @@ class AgentChatViewModelTest {
             viewModel.onAction(AgentChatAction.ProfileChanged(ANDROID_BEGINNER_PROFILE_ID))
             runCurrent()
             viewModel.onAction(AgentChatAction.InputChanged("Explain recomposition"))
-            viewModel.onAction(AgentChatAction.Submit)
+            viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
 
             assertEquals(ANDROID_BEGINNER_PROFILE_ID, viewModel.uiState.value.activeProfileId)
             assertEquals(ANDROID_BEGINNER_PROFILE_ID, profileStore.snapshot.activeProfileId)
             assertTrue(
                 fakeAgent.calls
-                    .single()
-                    .systemInstruction
-                    ?.contains("Android beginner") == true,
+                    .all { call -> call.systemInstruction?.contains("Android beginner") == true },
             )
             assertTrue(
                 fakeAgent.calls
-                    .single()
-                    .systemInstruction
-                    ?.contains("Explain step by step") == true,
+                    .all { call -> call.systemInstruction?.contains("Explain step by step") == true },
             )
             assertFalse(
                 fakeAgent.calls
-                    .single()
+                    .any { call ->
+                        call.systemInstruction
+                            .orEmpty()
+                            .contains("Senior Kotlin developer")
+                    },
+            )
+        }
+
+    @Test
+    fun startTaskUsesNormalizedUserMessageAndShowsFinalResponse() =
+        runTest {
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
+            val viewModel = createViewModel(fakeAgent)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("  Hello\nGemini  "))
+            viewModel.onAction(AgentChatAction.StartTask)
+            runCurrent()
+
+            assertEquals("", viewModel.uiState.value.input)
+            assertFalse(viewModel.uiState.value.canRunTask)
+            assertTrue(
+                fakeAgent.calls
+                    .all { call -> call.modelName == null && call.totalTokenLimit == null },
+            )
+            assertEquals(
+                listOf(
+                    AgentChatMessage(role = AgentChatRole.USER, text = "Hello Gemini"),
+                    AgentChatMessage(role = AgentChatRole.MODEL, text = "Final answer"),
+                ),
+                viewModel.uiState.value.messages,
+            )
+            assertTrue(
+                fakeAgent.calls
+                    .first()
                     .systemInstruction
-                    .orEmpty()
-                    .contains("Senior Kotlin developer"),
+                    ?.contains("Senior Kotlin developer") == true,
+            )
+            assertTrue(
+                fakeAgent.calls
+                    .first()
+                    .messages
+                    .last() is AgentMessage.User,
             )
         }
 
@@ -231,7 +208,7 @@ class AgentChatViewModelTest {
         }
 
     @Test
-    fun compareProfilesSendsSamePromptWithDifferentSystemInstructions() =
+    fun compareProfilesUsesSamePromptWithDifferentSystemInstructions() =
         runTest {
             val fakeAgent =
                 FakeLlmAgent(
@@ -263,41 +240,6 @@ class AgentChatViewModelTest {
                     .map { it.text },
             )
             assertEquals(emptyList<AgentChatMessage>(), viewModel.uiState.value.messages)
-        }
-
-    @Test
-    fun stopCancelsRunningSubmitAndIgnoresLateResponse() =
-        runTest {
-            val response = CompletableDeferred<AgentResult<String>>()
-            val fakeAgent = FakeLlmAgent(results = ArrayDeque(listOf(response)))
-            val historyStore = FakeAgentChatHistoryStore()
-            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
-
-            viewModel.onAction(AgentChatAction.InputChanged("Run long request"))
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-
-            assertTrue(viewModel.uiState.value.isLoading)
-            assertTrue(viewModel.uiState.value.canStop)
-
-            viewModel.onAction(AgentChatAction.Stop)
-            runCurrent()
-
-            assertFalse(viewModel.uiState.value.isLoading)
-            assertEquals(
-                AgentChatMessage(role = AgentChatRole.MODEL, text = "Stopped by user.", isError = true),
-                viewModel.uiState.value.messages
-                    .last(),
-            )
-            assertEquals(viewModel.uiState.value.messages, historyStore.snapshot.messages)
-
-            response.complete(GeminiResult.Success("Late answer should be ignored"))
-            runCurrent()
-
-            assertFalse(
-                viewModel.uiState.value.messages
-                    .any { it.text.contains("Late answer should be ignored") },
-            )
         }
 
     @Test
@@ -349,13 +291,13 @@ class AgentChatViewModelTest {
     @Test
     fun clearChatKeepsTaskContextAndLongTermMemory() =
         runTest {
-            val fakeAgent = FakeLlmAgent()
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
             val viewModel = createViewModel(fakeAgent)
 
             viewModel.onAction(AgentChatAction.TaskContextChanged("Goal: keep task context"))
             viewModel.onAction(AgentChatAction.LongTermMemoryChanged("# Preferences\n\n- Answer briefly"))
             viewModel.onAction(AgentChatAction.InputChanged("First"))
-            viewModel.onAction(AgentChatAction.Submit)
+            viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
             viewModel.onAction(AgentChatAction.ClearChat)
             runCurrent()
@@ -388,56 +330,6 @@ class AgentChatViewModelTest {
         }
 
     @Test
-    fun submitShowsErrorsButDoesNotSendThemBackInHistory() =
-        runTest {
-            val fakeAgent =
-                FakeLlmAgent(
-                    results =
-                        ArrayDeque(
-                            listOf(
-                                CompletableDeferred(GeminiResult.Failure(GeminiNetworkError.MissingApiKey)),
-                                CompletableDeferred(GeminiResult.Success("Recovered")),
-                            ),
-                        ),
-                )
-            val viewModel = createViewModel(fakeAgent)
-
-            viewModel.onAction(AgentChatAction.InputChanged("First"))
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-            viewModel.onAction(AgentChatAction.InputChanged("Second"))
-            viewModel.onAction(AgentChatAction.Submit)
-            runCurrent()
-
-            assertEquals(listOf(AgentMessage.User("Second")), fakeAgent.calls[1].messages)
-            assertEquals(
-                AgentChatMessage(role = AgentChatRole.MODEL, text = GeminiNetworkError.MissingApiKey.userMessage, isError = true),
-                viewModel.uiState.value.messages[1],
-            )
-        }
-
-    @Test
-    fun blankSubmitDoesNotCallAgent() {
-        val fakeAgent = FakeLlmAgent()
-        val viewModel = createViewModel(fakeAgent)
-
-        viewModel.onAction(AgentChatAction.InputChanged(" "))
-        viewModel.onAction(AgentChatAction.Submit)
-
-        assertTrue(fakeAgent.calls.isEmpty())
-        assertEquals(
-            listOf(
-                AgentChatMessage(
-                    role = AgentChatRole.MODEL,
-                    text = "Enter a message before sending.",
-                    isError = true,
-                ),
-            ),
-            viewModel.uiState.value.messages,
-        )
-    }
-
-    @Test
     fun initRestoresSavedMessages() =
         runTest {
             val historyStore =
@@ -464,32 +356,213 @@ class AgentChatViewModelTest {
         }
 
     @Test
-    fun restoredHistoryIsSentAfterRestart() =
+    fun startTaskRunsFormalPipelineAndStoresArtifacts() =
         runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Requirements report")),
+                                CompletableDeferred(GeminiResult.Success("Risks report")),
+                                CompletableDeferred(GeminiResult.Success("Task spec")),
+                                CompletableDeferred(GeminiResult.Success("Draft result")),
+                                CompletableDeferred(GeminiResult.Success("Validation report")),
+                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                            ),
+                        ),
+                )
             val historyStore = FakeAgentChatHistoryStore()
-            val firstAgent = FakeLlmAgent(GeminiResult.Success("First answer"))
-            val firstViewModel = createViewModel(firstAgent, historyStore)
-
-            firstViewModel.onAction(AgentChatAction.InputChanged("First question"))
-            firstViewModel.onAction(AgentChatAction.Submit)
+            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
             runCurrent()
 
-            val secondAgent = FakeLlmAgent()
-            val restartedViewModel = createViewModel(secondAgent, historyStore)
-            runCurrent()
-            restartedViewModel.onAction(AgentChatAction.InputChanged("Second question"))
-            restartedViewModel.onAction(AgentChatAction.Submit)
+            viewModel.onAction(AgentChatAction.InputChanged("Build task state"))
+            viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
 
+            val taskState = viewModel.uiState.value.memory.taskState
+            assertEquals(6, fakeAgent.calls.size)
+            assertEquals(AgentTaskStatus.DONE, taskState.status)
             assertEquals(
                 listOf(
-                    AgentMessage.User("First question"),
-                    AgentMessage.Model("First answer"),
-                    AgentMessage.User("Second question"),
+                    AgentTaskArtifactType.REQUIREMENTS_REPORT,
+                    AgentTaskArtifactType.RISKS_REPORT,
+                    AgentTaskArtifactType.TASK_SPEC,
+                    AgentTaskArtifactType.EXECUTION_DRAFT,
+                    AgentTaskArtifactType.VALIDATION_REPORT,
+                    AgentTaskArtifactType.FINAL_ANSWER,
                 ),
-                secondAgent.calls.single().messages,
+                taskState.artifacts.map { it.type },
+            )
+            assertEquals(
+                AgentChatMessage(role = AgentChatRole.MODEL, text = "Final answer"),
+                viewModel.uiState.value.messages
+                    .last(),
+            )
+            assertEquals(taskState, historyStore.snapshot.memory.taskState)
+        }
+
+    @Test
+    fun pauseTaskCancelsRunningPipelineAndIgnoresLateResponse() =
+        runTest {
+            val response = CompletableDeferred<AgentResult<String>>()
+            val fakeAgent =
+                FakeLlmAgent(
+                    results = ArrayDeque(listOf(response)),
+                )
+            val viewModel = createViewModel(fakeAgent)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Run long task"))
+            viewModel.onAction(AgentChatAction.StartTask)
+            runCurrent()
+
+            assertEquals(2, fakeAgent.calls.size)
+            assertEquals(AgentTaskStatus.RUNNING, viewModel.uiState.value.memory.taskState.status)
+
+            viewModel.onAction(AgentChatAction.PauseTask)
+            runCurrent()
+
+            assertEquals(AgentTaskStatus.PAUSED, viewModel.uiState.value.memory.taskState.status)
+            assertTrue(
+                viewModel.uiState.value.memory.taskState.branches
+                    .all { it.status == AgentTaskBranchStatus.PAUSED },
+            )
+            assertFalse(viewModel.uiState.value.isLoading)
+            assertTrue(
+                viewModel.uiState.value.messages
+                    .last()
+                    .text
+                    .contains("Task paused"),
+            )
+
+            response.complete(GeminiResult.Success("Late task spec"))
+            runCurrent()
+
+            assertTrue(
+                viewModel.uiState.value.memory.taskState.artifacts
+                    .isEmpty(),
             )
         }
+
+    @Test
+    fun retryTaskRerunsOnlyFailedPlanningBranch() =
+        runTest {
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Requirements report")),
+                                CompletableDeferred(GeminiResult.Failure(GeminiNetworkError.MissingApiKey)),
+                                CompletableDeferred(GeminiResult.Success("Recovered risks report")),
+                                CompletableDeferred(GeminiResult.Success("Task spec")),
+                                CompletableDeferred(GeminiResult.Success("Draft result")),
+                                CompletableDeferred(GeminiResult.Success("Validation report")),
+                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Build task state"))
+            viewModel.onAction(AgentChatAction.StartTask)
+            runCurrent()
+
+            val failedState = viewModel.uiState.value.memory.taskState
+            assertEquals(2, fakeAgent.calls.size)
+            assertEquals(AgentTaskStatus.FAILED, failedState.status)
+            assertEquals("Requirements report", failedState.artifact(AgentTaskArtifactType.REQUIREMENTS_REPORT)?.text)
+            assertEquals(AgentTaskBranchStatus.DONE, failedState.branches.first { it.id == AgentTaskBranchId.REQUIREMENTS }.status)
+            assertEquals(AgentTaskBranchStatus.FAILED, failedState.branches.first { it.id == AgentTaskBranchId.RISKS }.status)
+
+            viewModel.onAction(AgentChatAction.RetryTask)
+            runCurrent()
+
+            assertEquals(7, fakeAgent.calls.size)
+            assertTrue((fakeAgent.calls[2].messages.last() as AgentMessage.User).text.contains("risks agent"))
+            assertEquals(AgentTaskStatus.DONE, viewModel.uiState.value.memory.taskState.status)
+            assertEquals("Final answer", viewModel.uiState.value.memory.taskState.finalAnswer)
+        }
+
+    @Test
+    fun resumeTaskContinuesFromSavedStepWithoutRepeatingPlanning() =
+        runTest {
+            val plannedState =
+                AgentTaskState(
+                    taskId = "task-1",
+                    originalPrompt = "Build task state",
+                    stage = AgentTaskStage.EXECUTION,
+                    step = AgentTaskStep.CREATE_DRAFT,
+                    status = AgentTaskStatus.PAUSED,
+                    branches =
+                        listOf(
+                            AgentTaskBranch(
+                                id = AgentTaskBranchId.REQUIREMENTS,
+                                expectedArtifactType = AgentTaskArtifactType.REQUIREMENTS_REPORT,
+                                status = AgentTaskBranchStatus.DONE,
+                            ),
+                            AgentTaskBranch(
+                                id = AgentTaskBranchId.RISKS,
+                                expectedArtifactType = AgentTaskArtifactType.RISKS_REPORT,
+                                status = AgentTaskBranchStatus.DONE,
+                            ),
+                        ),
+                    artifacts =
+                        listOf(
+                            AgentTaskArtifact(AgentTaskArtifactType.REQUIREMENTS_REPORT, "Requirements report"),
+                            AgentTaskArtifact(AgentTaskArtifactType.RISKS_REPORT, "Risks report"),
+                            AgentTaskArtifact(AgentTaskArtifactType.TASK_SPEC, "Task spec"),
+                        ),
+                )
+            val historyStore =
+                FakeAgentChatHistoryStore(
+                    AgentChatHistorySnapshot(
+                        memory = AgentChatMemorySnapshot(taskState = plannedState),
+                    ),
+                )
+            val fakeAgent =
+                FakeLlmAgent(
+                    results =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(GeminiResult.Success("Draft result")),
+                                CompletableDeferred(GeminiResult.Success("Validation report")),
+                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ResumeTask)
+            runCurrent()
+
+            assertEquals(3, fakeAgent.calls.size)
+            assertTrue(
+                (
+                    fakeAgent.calls
+                        .first()
+                        .messages
+                        .last() as AgentMessage.User
+                ).text.contains("execution"),
+            )
+            assertEquals(AgentTaskStatus.DONE, viewModel.uiState.value.memory.taskState.status)
+            assertEquals("Final answer", viewModel.uiState.value.memory.taskState.finalAnswer)
+        }
+
+    private fun successfulTaskResults(): ArrayDeque<CompletableDeferred<AgentResult<String>>> =
+        ArrayDeque(
+            listOf(
+                CompletableDeferred(GeminiResult.Success("Requirements report")),
+                CompletableDeferred(GeminiResult.Success("Risks report")),
+                CompletableDeferred(GeminiResult.Success("Task spec")),
+                CompletableDeferred(GeminiResult.Success("Draft result")),
+                CompletableDeferred(GeminiResult.Success("Validation report")),
+                CompletableDeferred(GeminiResult.Success("Final answer")),
+            ),
+        )
 
     private fun createViewModel(
         fakeAgent: FakeLlmAgent = FakeLlmAgent(),

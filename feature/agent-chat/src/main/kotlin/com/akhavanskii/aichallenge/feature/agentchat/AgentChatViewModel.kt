@@ -8,6 +8,9 @@ import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,7 +40,10 @@ class AgentChatViewModel
                 val profileSnapshot = userProfileStore.load()
                 mutableUiState.update { current ->
                     if (current == AgentChatUiState()) {
-                        val memory = snapshot.memory.withLongTermMarkdown(longTermMemory)
+                        val memory =
+                            snapshot.memory
+                                .restoreInterruptedTask()
+                                .withLongTermMarkdown(longTermMemory)
                         val profiles = profileSnapshot.normalized
                         current.copy(
                             messages = snapshot.messages,
@@ -65,9 +71,13 @@ class AgentChatViewModel
                 AgentChatAction.ClearChat -> clearChat()
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
+                AgentChatAction.PauseTask -> pauseTask()
+                AgentChatAction.ResetTask -> resetTask()
+                AgentChatAction.ResumeTask -> resumeTask()
+                AgentChatAction.RetryTask -> retryTask()
                 AgentChatAction.SaveLongTermMemory -> saveLongTermMemory()
+                AgentChatAction.StartTask -> startTask()
                 AgentChatAction.Stop -> stopActiveRequest()
-                AgentChatAction.Submit -> submit()
             }
         }
 
@@ -192,58 +202,184 @@ class AgentChatViewModel
             }
         }
 
-        private fun submit() {
+        private fun startTask() {
             val currentState = mutableUiState.value
-            if (currentState.isLoading) return
+            if (!currentState.canRunTask) return
 
             val prompt = currentState.input.normalizedPromptOrNull()
             if (prompt == null) {
-                mutableUiState.update {
-                    it.copy(
-                        messages =
-                            it.messages +
-                                AgentChatMessage(
-                                    role = AgentChatRole.MODEL,
-                                    text = "Enter a message before sending.",
-                                    isError = true,
-                                ),
-                    )
-                }
+                appendLocalError("Enter a task before running the pipeline.")
                 return
             }
 
-            val userMessage = AgentChatMessage(role = AgentChatRole.USER, text = prompt)
-            val loadingMessage =
-                AgentChatMessage(
-                    role = AgentChatRole.MODEL,
-                    text = "Waiting for Gemini",
-                    isLoading = true,
-                )
-            val preparedPrompt =
-                AgentChatMemoryPromptBuilder.build(
-                    latestUserMessage = prompt,
-                    chatMessages = currentState.messages,
-                    memory = currentState.memory,
-                    userProfile = currentState.activeProfile,
-                    selection =
-                        AgentChatMemorySelection(
-                            includeChatHistory = true,
-                            includeTaskContext = true,
-                            includeLongTermMarkdown = true,
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = currentState.memory.taskState,
+                    event =
+                        AgentTaskEvent.Start(
+                            taskId = nextTaskId(),
+                            prompt = prompt,
                         ),
                 )
+            if (!transition.isAccepted) {
+                appendLocalError(transition.errorMessage.orEmpty())
+                return
+            }
+
             val updatedState =
                 mutableUiState.updateAndGet {
                     it.copy(
                         input = "",
-                        messages = currentState.messages + userMessage + loadingMessage,
-                        memory = currentState.memory.withLastRequest(preparedPrompt.requestContext),
+                        messages =
+                            currentState.messages +
+                                AgentChatMessage(role = AgentChatRole.USER, text = prompt) +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Running task pipeline",
+                                    isLoading = true,
+                                ),
+                        memory = currentState.memory.withTaskState(transition.state),
                         compareResults = emptyList(),
                     )
                 }
             persistHistory(updatedState)
+            launchTaskPipeline()
+        }
 
+        private fun pauseTask() {
+            val currentState = mutableUiState.value
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = currentState.memory.taskState,
+                    event = AgentTaskEvent.Pause,
+                )
+            if (!transition.isAccepted) return
+
+            activeRequestId += 1
+            activeRequestJob?.cancel()
+            activeRequestJob = null
+
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(
+                        messages =
+                            state.messages.replaceLastLoading(
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Task paused at ${transition.state.step.title}.",
+                                ),
+                            ),
+                        memory = state.memory.withTaskState(transition.state),
+                    )
+                }
+            persistHistory(updatedState)
+        }
+
+        private fun resumeTask() {
+            continuePausedTask(
+                event = AgentTaskEvent.Resume,
+                loadingText = "Continuing task pipeline",
+            )
+        }
+
+        private fun retryTask() {
+            continuePausedTask(
+                event = AgentTaskEvent.Retry,
+                loadingText = "Retrying failed task step",
+            )
+        }
+
+        private fun resetTask() {
+            val currentState = mutableUiState.value
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = currentState.memory.taskState,
+                    event = AgentTaskEvent.Reset,
+                )
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(memory = state.memory.withTaskState(transition.state))
+                }
+            persistHistory(updatedState)
+        }
+
+        private fun continuePausedTask(
+            event: AgentTaskEvent,
+            loadingText: String,
+        ) {
+            val currentState = mutableUiState.value
+            if (currentState.isLoading) return
+
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = currentState.memory.taskState,
+                    event = event,
+                )
+            if (!transition.isAccepted) {
+                appendLocalError(transition.errorMessage.orEmpty())
+                return
+            }
+
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(
+                        messages =
+                            state.messages +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = loadingText,
+                                    isLoading = true,
+                                ),
+                        memory = state.memory.withTaskState(transition.state),
+                        compareResults = emptyList(),
+                    )
+                }
+            persistHistory(updatedState)
+            launchTaskPipeline()
+        }
+
+        private fun launchTaskPipeline() {
             launchActiveRequest { requestId ->
+                runTaskPipeline(requestId)
+            }
+        }
+
+        private suspend fun runTaskPipeline(requestId: Long) {
+            while (isCurrentRequest(requestId)) {
+                val currentState = mutableUiState.value
+                val taskState = currentState.memory.taskState
+                if (taskState.status != AgentTaskStatus.RUNNING) return
+
+                if (taskState.step == AgentTaskStep.PARALLEL_ANALYSIS) {
+                    if (!runParallelPlanningStep(requestId)) return
+                    continue
+                }
+
+                val artifactType = taskState.expectedArtifactType ?: return
+                val prompt = taskState.buildCurrentStepPrompt()
+                if (prompt.isBlank()) return
+
+                val preparedPrompt =
+                    AgentChatMemoryPromptBuilder.build(
+                        latestUserMessage = prompt,
+                        chatMessages = emptyList(),
+                        memory = currentState.memory,
+                        userProfile = currentState.activeProfile,
+                        selection =
+                            AgentChatMemorySelection(
+                                includeChatHistory = false,
+                                includeTaskState = true,
+                                includeTaskContext = true,
+                                includeLongTermMarkdown = true,
+                            ),
+                        taskStage = taskState.stage,
+                    )
+                val promptState =
+                    mutableUiState.updateAndGet { state ->
+                        state.copy(memory = state.memory.withLastRequest(preparedPrompt.requestContext))
+                    }
+                persistHistory(promptState)
+
                 when (
                     val result =
                         llmAgent.sendMessage(
@@ -252,17 +388,221 @@ class AgentChatViewModel
                         )
                 ) {
                     is GeminiResult.Success -> {
-                        if (isCurrentRequest(requestId)) {
-                            replaceLoadingMessage(result.value)
+                        if (!isCurrentRequest(requestId)) return
+                        val transition =
+                            AgentTaskStateMachine.reduce(
+                                state = mutableUiState.value.memory.taskState,
+                                event =
+                                    AgentTaskEvent.StepSucceeded(
+                                        AgentTaskArtifact(
+                                            type = artifactType,
+                                            text = result.value,
+                                        ),
+                                    ),
+                            )
+                        if (!transition.isAccepted) {
+                            failTaskStep(transition.errorMessage.orEmpty())
+                            return
+                        }
+                        val updatedState =
+                            mutableUiState.updateAndGet { state ->
+                                state.copy(memory = state.memory.withTaskState(transition.state))
+                            }
+                        persistHistory(updatedState)
+
+                        if (transition.state.status == AgentTaskStatus.DONE) {
+                            replaceLoadingMessage(
+                                transition.state.finalAnswer
+                                    .orEmpty()
+                                    .ifBlank { "Task completed." },
+                            )
+                            return
                         }
                     }
                     is GeminiResult.Failure -> {
-                        if (isCurrentRequest(requestId)) {
-                            replaceLoadingMessage(result.error.userMessage, isError = true)
-                        }
+                        if (!isCurrentRequest(requestId)) return
+                        failTaskStep(result.error.userMessage)
+                        return
                     }
                 }
             }
+        }
+
+        private suspend fun runParallelPlanningStep(requestId: Long): Boolean {
+            val currentState = mutableUiState.value
+            val taskState = currentState.memory.taskState
+            val branchesToRun =
+                taskState.branches
+                    .filter { it.status == AgentTaskBranchStatus.RUNNING }
+            if (branchesToRun.isEmpty()) {
+                if (taskState.branches.isNotEmpty() && taskState.branches.all { it.status == AgentTaskBranchStatus.DONE }) {
+                    val transition =
+                        AgentTaskStateMachine.reduce(
+                            state = taskState,
+                            event = AgentTaskEvent.ParallelBranchesFinished(successfulArtifacts = emptyList()),
+                        )
+                    if (transition.isAccepted) {
+                        val updatedState =
+                            mutableUiState.updateAndGet { state ->
+                                state.copy(memory = state.memory.withTaskState(transition.state))
+                            }
+                        persistHistory(updatedState)
+                        return true
+                    }
+                }
+                replaceTaskWithFailure("No planning branches available.")
+                return false
+            }
+
+            val branchRequests =
+                branchesToRun.map { branch ->
+                    val preparedPrompt =
+                        AgentChatMemoryPromptBuilder.build(
+                            latestUserMessage = branch.buildPrompt(),
+                            chatMessages = emptyList(),
+                            memory = currentState.memory,
+                            userProfile = currentState.activeProfile,
+                            selection =
+                                AgentChatMemorySelection(
+                                    includeChatHistory = false,
+                                    includeTaskState = true,
+                                    includeTaskContext = true,
+                                    includeLongTermMarkdown = true,
+                                ),
+                            taskStage = taskState.stage,
+                        )
+                    PlanningBranchRequest(branch = branch, preparedPrompt = preparedPrompt)
+                }
+            val promptState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(memory = state.memory.withLastRequest(branchRequests.last().preparedPrompt.requestContext))
+                }
+            persistHistory(promptState)
+
+            val branchResults =
+                coroutineScope {
+                    branchRequests
+                        .map { request ->
+                            async {
+                                val result =
+                                    llmAgent.sendMessage(
+                                        messages = request.preparedPrompt.messages,
+                                        systemInstruction = request.preparedPrompt.systemInstruction,
+                                    )
+                                when (result) {
+                                    is GeminiResult.Success ->
+                                        PlanningBranchResult(
+                                            branchId = request.branch.id,
+                                            artifact =
+                                                AgentTaskArtifact(
+                                                    type = request.branch.expectedArtifactType,
+                                                    text = result.value,
+                                                ),
+                                        )
+                                    is GeminiResult.Failure ->
+                                        PlanningBranchResult(
+                                            branchId = request.branch.id,
+                                            errorMessage = result.error.userMessage,
+                                        )
+                                }
+                            }
+                        }.awaitAll()
+                }
+            if (!isCurrentRequest(requestId)) return false
+
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = mutableUiState.value.memory.taskState,
+                    event =
+                        AgentTaskEvent.ParallelBranchesFinished(
+                            successfulArtifacts =
+                                branchResults.mapNotNull { result ->
+                                    result.artifact?.let { artifact ->
+                                        AgentTaskBranchArtifact(
+                                            branchId = result.branchId,
+                                            artifact = artifact,
+                                        )
+                                    }
+                                },
+                            failures =
+                                branchResults.mapNotNull { result ->
+                                    result.errorMessage?.let { message ->
+                                        AgentTaskBranchFailure(
+                                            branchId = result.branchId,
+                                            message = message,
+                                        )
+                                    }
+                                },
+                        ),
+                )
+            if (!transition.isAccepted) {
+                replaceTaskWithFailure(transition.errorMessage.orEmpty())
+                return false
+            }
+
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(memory = state.memory.withTaskState(transition.state))
+                }
+            persistHistory(updatedState)
+
+            if (transition.state.status == AgentTaskStatus.FAILED) {
+                replaceLoadingMessage(
+                    "Task failed at ${transition.state.step.title}: ${transition.state.errorMessage}",
+                    isError = true,
+                )
+                return false
+            }
+
+            return true
+        }
+
+        private fun replaceTaskWithFailure(message: String) {
+            val failedState =
+                mutableUiState.value.memory.taskState.copy(
+                    status = AgentTaskStatus.FAILED,
+                    errorMessage = message,
+                )
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(
+                        messages =
+                            state.messages.replaceLastLoading(
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Task failed at ${failedState.step.title}: $message",
+                                    isError = true,
+                                ),
+                            ),
+                        memory = state.memory.withTaskState(failedState),
+                    )
+                }
+            persistHistory(updatedState)
+        }
+
+        private fun failTaskStep(message: String) {
+            val currentState = mutableUiState.value
+            val transition =
+                AgentTaskStateMachine.reduce(
+                    state = currentState.memory.taskState,
+                    event = AgentTaskEvent.StepFailed(message),
+                )
+            val failedState = transition.state
+            val updatedState =
+                mutableUiState.updateAndGet { state ->
+                    state.copy(
+                        messages =
+                            state.messages.replaceLastLoading(
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Task failed at ${failedState.step.title}: $message",
+                                    isError = true,
+                                ),
+                            ),
+                        memory = state.memory.withTaskState(failedState),
+                    )
+                }
+            persistHistory(updatedState)
         }
 
         private fun compareProfiles() {
@@ -329,7 +669,12 @@ class AgentChatViewModel
         }
 
         private fun stopActiveRequest() {
-            if (!mutableUiState.value.isLoading) return
+            val currentState = mutableUiState.value
+            if (!currentState.isLoading) return
+            if (currentState.memory.taskState.status == AgentTaskStatus.RUNNING) {
+                pauseTask()
+                return
+            }
 
             activeRequestId += 1
             activeRequestJob?.cancel()
@@ -405,6 +750,20 @@ class AgentChatViewModel
             persistHistory(updatedState)
         }
 
+        private fun appendLocalError(message: String) {
+            mutableUiState.update { state ->
+                state.copy(
+                    messages =
+                        state.messages +
+                            AgentChatMessage(
+                                role = AgentChatRole.MODEL,
+                                text = message.ifBlank { "Task action is not available." },
+                                isError = true,
+                            ),
+                )
+            }
+        }
+
         private fun persistHistory(state: AgentChatUiState) {
             viewModelScope.launch {
                 historyStore.save(state.toHistorySnapshot())
@@ -435,6 +794,8 @@ class AgentChatViewModel
 
         private fun isCurrentRequest(requestId: Long): Boolean = activeRequestId == requestId
 
+        private fun nextTaskId(): String = "task-${activeRequestId + 1}"
+
         private fun AgentChatUiState.toHistorySnapshot(): AgentChatHistorySnapshot =
             AgentChatHistorySnapshot(
                 messages = messages.filterNot { it.isLoading },
@@ -454,6 +815,17 @@ class AgentChatViewModel
                 set(loadingIndex, message)
             }
         }
+
+        private data class PlanningBranchRequest(
+            val branch: AgentTaskBranch,
+            val preparedPrompt: AgentChatPreparedPrompt,
+        )
+
+        private data class PlanningBranchResult(
+            val branchId: AgentTaskBranchId,
+            val artifact: AgentTaskArtifact? = null,
+            val errorMessage: String? = null,
+        )
 
         private companion object {
             const val PROFILE_COMPARE_LIMIT = 3

@@ -29,7 +29,7 @@ class AgentChatScreenTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun sendButtonIsDisabledUntilInputHasText() {
+    fun runTaskButtonIsDisabledUntilInputHasText() {
         var state by mutableStateOf(AgentChatUiState())
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {
@@ -45,9 +45,46 @@ class AgentChatScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsNotEnabled()
+        composeRule.onNodeWithTag(AgentChatTags.RUN_TASK_BUTTON).assertIsNotEnabled()
         composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput("Hello")
-        composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsEnabled()
+        composeRule.onNodeWithTag(AgentChatTags.RUN_TASK_BUTTON).assertIsEnabled()
+    }
+
+    @Test
+    fun taskStatePanelShowsCurrentStepAndDispatchesContinue() {
+        val pausedTaskState =
+            AgentTaskState(
+                taskId = "task-1",
+                originalPrompt = "Build task pipeline",
+                stage = AgentTaskStage.EXECUTION,
+                step = AgentTaskStep.CREATE_DRAFT,
+                status = AgentTaskStatus.PAUSED,
+                artifacts = listOf(AgentTaskArtifact(AgentTaskArtifactType.TASK_SPEC, "Task spec")),
+            )
+        val actions = mutableListOf<AgentChatAction>()
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            memory = AgentChatMemorySnapshot(taskState = pausedTaskState),
+                        ),
+                    onAction = { action -> actions += action },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.TASK_STATE).assertIsDisplayed()
+        composeRule.onAllNodesWithText("Paused", substring = true).assertCountEquals(2)
+        composeRule.onAllNodesWithText("Expected: Tap Continue task", substring = true).assertCountEquals(1)
+        composeRule
+            .onNodeWithTag(AgentChatTags.RESUME_TASK_BUTTON)
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+
+        assertTrue(actions.contains(AgentChatAction.ResumeTask))
     }
 
     @Test
@@ -74,7 +111,7 @@ class AgentChatScreenTest {
 
         composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput(longDraft)
 
-        composeRule.onNodeWithTag(AgentChatTags.SEND_BUTTON).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.RUN_TASK_BUTTON).assertIsDisplayed()
         composeRule.onNodeWithTag(AgentChatTags.CLEAR_BUTTON).assertIsDisplayed()
         composeRule.onNodeWithTag(AgentChatTags.STOP_BUTTON).assertIsDisplayed()
     }
@@ -154,6 +191,15 @@ class AgentChatScreenTest {
         }
 
         composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS).assertIsDisplayed()
+        composeRule.onNodeWithText("Profile: Senior Kotlin developer", substring = true).assertIsDisplayed()
+        composeRule
+            .onNodeWithText("Prompt: Short-term, TaskContext, Long-term markdown", substring = true)
+            .assertIsDisplayed()
+        composeRule.onAllNodesWithText("Source: TaskContext", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE).assertCountEquals(0)
+
+        composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS_TOGGLE).performClick()
+
         composeRule.onNodeWithText("User profile", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Source: Senior Kotlin developer", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Short-term (2 messages)", substring = true).assertIsDisplayed()
@@ -219,6 +265,7 @@ class AgentChatScreenTest {
             }
         }
 
+        composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS_TOGGLE).performScrollTo().performClick()
         composeRule.onNodeWithTag(AgentChatTags.PROFILE_EDITOR_TOGGLE).performClick()
         composeRule.onNodeWithTag(AgentChatTags.PROFILE_INPUT).performScrollTo().performTextInput("\nStyle: Be brief")
         composeRule.onNodeWithTag(AgentChatTags.TASK_CONTEXT_EDITOR_TOGGLE).performScrollTo().performClick()
@@ -260,6 +307,7 @@ class AgentChatScreenTest {
             }
         }
 
+        composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS_TOGGLE).performScrollTo().performClick()
         composeRule.onNodeWithTag(AgentChatTags.PROFILE_MENU_BUTTON).performClick()
         composeRule.onNodeWithTag("${AgentChatTags.PROFILE_PREFIX}_$ANDROID_BEGINNER_PROFILE_ID").performClick()
 
@@ -299,6 +347,7 @@ class AgentChatScreenTest {
             }
         }
 
+        composeRule.onNodeWithTag(AgentChatTags.MEMORY_LAYERS_TOGGLE).performScrollTo().performClick()
         composeRule
             .onNodeWithTag(AgentChatTags.COMPARE_PROFILES_BUTTON)
             .performScrollTo()
@@ -306,7 +355,7 @@ class AgentChatScreenTest {
             .performClick()
 
         assertTrue(actions.contains(AgentChatAction.CompareProfiles))
-        composeRule.onNodeWithTag(AgentChatTags.PROFILE_COMPARE_RESULTS).assertIsDisplayed()
+        composeRule.onNodeWithTag(AgentChatTags.PROFILE_COMPARE_RESULTS).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Profile-specific answer", substring = true).assertIsDisplayed()
     }
 

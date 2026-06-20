@@ -15,10 +15,13 @@ data class AgentChatUiState(
     val isLongTermMemoryDirty: Boolean = false,
 ) : UiState {
     val isLoading: Boolean
-        get() = messages.any { it.isLoading } || compareResults.any { it.isLoading }
+        get() =
+            messages.any { it.isLoading } ||
+                compareResults.any { it.isLoading } ||
+                memory.taskState.status == AgentTaskStatus.RUNNING
 
-    val canSend: Boolean
-        get() = input.isNotBlank() && !isLoading
+    val canRunTask: Boolean
+        get() = input.isNotBlank() && !isLoading && memory.taskState.canStartNewTask
 
     val canCompareProfiles: Boolean
         get() = input.isNotBlank() && !isLoading && profiles.size >= 2
@@ -27,7 +30,19 @@ data class AgentChatUiState(
         get() = messages.isNotEmpty() && !isLoading
 
     val canStop: Boolean
-        get() = isLoading
+        get() = isLoading && memory.taskState.status != AgentTaskStatus.RUNNING
+
+    val canPauseTask: Boolean
+        get() = memory.taskState.canPause
+
+    val canResumeTask: Boolean
+        get() = !isLoading && memory.taskState.canResume
+
+    val canRetryTask: Boolean
+        get() = !isLoading && memory.taskState.canRetry
+
+    val canResetTask: Boolean
+        get() = !isLoading && memory.taskState.canReset
 
     val canSaveLongTermMemory: Boolean
         get() = isLongTermMemoryDirty && !isLoading
@@ -82,7 +97,15 @@ sealed interface AgentChatAction : UiEvent {
         val input: String,
     ) : AgentChatAction
 
-    data object Submit : AgentChatAction
+    data object StartTask : AgentChatAction
+
+    data object PauseTask : AgentChatAction
+
+    data object ResumeTask : AgentChatAction
+
+    data object RetryTask : AgentChatAction
+
+    data object ResetTask : AgentChatAction
 
     data object CompareProfiles : AgentChatAction
 
