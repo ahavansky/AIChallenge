@@ -15,4 +15,9 @@ enum class GeminiModelOption(
         title = "Gemini 2.5 Flash-Lite",
         description = "Stable free-tier model tuned for lower latency and simpler high-volume tasks.",
     ),
+    GEMMA_4_31B_IT(
+        modelName = "gemma-4-31b-it",
+        title = "Gemma 4 31B IT",
+        description = "Free Gemma 4 dense model for stronger open-model reasoning.",
+    ),
 }

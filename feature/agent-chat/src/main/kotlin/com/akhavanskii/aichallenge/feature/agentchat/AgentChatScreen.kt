@@ -142,10 +142,18 @@ fun AgentChatScreen(
                 canPauseTask = state.canPauseTask,
                 canResumeTask = state.canResumeTask,
                 canRetryTask = state.canRetryTask,
+                canApprovePlan = state.canApprovePlan,
+                canRequestPlanRevision = state.canRequestPlanRevision,
+                canAcceptValidation = state.canAcceptValidation,
+                canRequestExecutionRevision = state.canRequestExecutionRevision,
                 canResetTask = state.canResetTask,
                 onPauseTask = { onAction(AgentChatAction.PauseTask) },
                 onResumeTask = { onAction(AgentChatAction.ResumeTask) },
                 onRetryTask = { onAction(AgentChatAction.RetryTask) },
+                onApprovePlan = { onAction(AgentChatAction.ApprovePlan) },
+                onRequestPlanRevision = { onAction(AgentChatAction.RequestPlanRevision) },
+                onAcceptValidation = { onAction(AgentChatAction.AcceptValidation) },
+                onRequestExecutionRevision = { onAction(AgentChatAction.RequestExecutionRevision) },
                 onResetTask = { onAction(AgentChatAction.ResetTask) },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -225,10 +233,18 @@ private fun TaskStatePanel(
     canPauseTask: Boolean,
     canResumeTask: Boolean,
     canRetryTask: Boolean,
+    canApprovePlan: Boolean,
+    canRequestPlanRevision: Boolean,
+    canAcceptValidation: Boolean,
+    canRequestExecutionRevision: Boolean,
     canResetTask: Boolean,
     onPauseTask: () -> Unit,
     onResumeTask: () -> Unit,
     onRetryTask: () -> Unit,
+    onApprovePlan: () -> Unit,
+    onRequestPlanRevision: () -> Unit,
+    onAcceptValidation: () -> Unit,
+    onRequestExecutionRevision: () -> Unit,
     onResetTask: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -337,6 +353,34 @@ private fun TaskStatePanel(
                     Text("Retry step")
                 }
                 TextButton(
+                    onClick = onApprovePlan,
+                    enabled = canApprovePlan,
+                    modifier = Modifier.testTag(AgentChatTags.APPROVE_PLAN_BUTTON),
+                ) {
+                    Text("Approve plan")
+                }
+                TextButton(
+                    onClick = onRequestPlanRevision,
+                    enabled = canRequestPlanRevision,
+                    modifier = Modifier.testTag(AgentChatTags.REQUEST_PLAN_REVISION_BUTTON),
+                ) {
+                    Text("Revise plan")
+                }
+                TextButton(
+                    onClick = onAcceptValidation,
+                    enabled = canAcceptValidation,
+                    modifier = Modifier.testTag(AgentChatTags.ACCEPT_VALIDATION_BUTTON),
+                ) {
+                    Text("Accept validation")
+                }
+                TextButton(
+                    onClick = onRequestExecutionRevision,
+                    enabled = canRequestExecutionRevision,
+                    modifier = Modifier.testTag(AgentChatTags.REQUEST_EXECUTION_REVISION_BUTTON),
+                ) {
+                    Text("Revise draft")
+                }
+                TextButton(
                     onClick = onResetTask,
                     enabled = canResetTask,
                     modifier = Modifier.testTag(AgentChatTags.RESET_TASK_BUTTON),
@@ -353,6 +397,7 @@ private fun TaskStatePanel(
                 }
             }
             if (artifactsExpanded) {
+                val expandedArtifacts = remember(taskState.taskId) { mutableStateOf(setOf<Int>()) }
                 Column(
                     modifier =
                         Modifier
@@ -360,8 +405,16 @@ private fun TaskStatePanel(
                             .testTag(AgentChatTags.TASK_ARTIFACTS),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    taskState.artifacts.forEach { artifact ->
+                    taskState.artifacts.forEachIndexed { index, artifact ->
+                        val isExpanded = index in expandedArtifacts.value
                         Surface(
+                            onClick = {
+                                expandedArtifacts.value = if (isExpanded) {
+                                    expandedArtifacts.value - index
+                                } else {
+                                    expandedArtifacts.value + index
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surface,
@@ -379,7 +432,7 @@ private fun TaskStatePanel(
                                     text = artifact.text,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = COLLAPSED_ARTIFACT_LINES,
+                                    maxLines = if (isExpanded) Int.MAX_VALUE else COLLAPSED_ARTIFACT_LINES,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
@@ -1451,6 +1504,10 @@ object AgentChatTags {
     const val PAUSE_TASK_BUTTON = "agent_chat_pause_task_button"
     const val RESUME_TASK_BUTTON = "agent_chat_resume_task_button"
     const val RETRY_TASK_BUTTON = "agent_chat_retry_task_button"
+    const val APPROVE_PLAN_BUTTON = "agent_chat_approve_plan_button"
+    const val REQUEST_PLAN_REVISION_BUTTON = "agent_chat_request_plan_revision_button"
+    const val ACCEPT_VALIDATION_BUTTON = "agent_chat_accept_validation_button"
+    const val REQUEST_EXECUTION_REVISION_BUTTON = "agent_chat_request_execution_revision_button"
     const val RESET_TASK_BUTTON = "agent_chat_reset_task_button"
     const val TASK_BRANCHES = "agent_chat_task_branches"
     const val TASK_ARTIFACTS_TOGGLE = "agent_chat_task_artifacts_toggle"

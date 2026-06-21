@@ -80,7 +80,11 @@ class AgentChatViewModel
                 AgentChatAction.ClearChat -> clearChat()
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
+                AgentChatAction.AcceptValidation -> acceptValidation()
+                AgentChatAction.ApprovePlan -> approvePlan()
                 AgentChatAction.PauseTask -> pauseTask()
+                AgentChatAction.RequestExecutionRevision -> requestExecutionRevision()
+                AgentChatAction.RequestPlanRevision -> requestPlanRevision()
                 AgentChatAction.ResetTask -> resetTask()
                 AgentChatAction.ResumeTask -> resumeTask()
                 AgentChatAction.RetryTask -> retryTask()
@@ -314,7 +318,10 @@ class AgentChatViewModel
                     state = currentState.memory.taskState,
                     event = AgentTaskEvent.Pause,
                 )
-            if (!transition.isAccepted) return
+            if (!transition.isAccepted) {
+                appendLocalError(transition.errorMessage.orEmpty())
+                return
+            }
 
             activeRequestId += 1
             activeRequestJob?.cancel()
@@ -350,6 +357,34 @@ class AgentChatViewModel
             )
         }
 
+        private fun approvePlan() {
+            continueTaskAfterUserDecision(
+                event = AgentTaskEvent.ApprovePlan,
+                loadingText = "Plan approved. Continuing execution.",
+            )
+        }
+
+        private fun requestPlanRevision() {
+            continueTaskAfterUserDecision(
+                event = AgentTaskEvent.RequestPlanRevision,
+                loadingText = "Revising task plan.",
+            )
+        }
+
+        private fun acceptValidation() {
+            continueTaskAfterUserDecision(
+                event = AgentTaskEvent.AcceptValidation,
+                loadingText = "Validation accepted. Producing final answer.",
+            )
+        }
+
+        private fun requestExecutionRevision() {
+            continueTaskAfterUserDecision(
+                event = AgentTaskEvent.RequestExecutionRevision,
+                loadingText = "Revising execution draft.",
+            )
+        }
+
         private fun resetTask() {
             val currentState = mutableUiState.value
             val transition =
@@ -357,6 +392,13 @@ class AgentChatViewModel
                     state = currentState.memory.taskState,
                     event = AgentTaskEvent.Reset,
                 )
+            if (!transition.isAccepted) {
+                appendLocalError(transition.errorMessage.orEmpty())
+                return
+            }
+            activeRequestId += 1
+            activeRequestJob?.cancel()
+            activeRequestJob = null
             val updatedState =
                 mutableUiState.updateAndGet { state ->
                     state.copy(memory = state.memory.withTaskState(transition.state))
@@ -365,6 +407,16 @@ class AgentChatViewModel
         }
 
         private fun continuePausedTask(
+            event: AgentTaskEvent,
+            loadingText: String,
+        ) {
+            continueTaskAfterUserDecision(
+                event = event,
+                loadingText = loadingText,
+            )
+        }
+
+        private fun continueTaskAfterUserDecision(
             event: AgentTaskEvent,
             loadingText: String,
         ) {
@@ -475,12 +527,7 @@ class AgentChatViewModel
                             }
                         persistHistory(updatedState)
 
-                        if (transition.state.status == AgentTaskStatus.DONE) {
-                            replaceLoadingMessage(
-                                transition.state.finalAnswer
-                                    .orEmpty()
-                                    .ifBlank { "Task completed." },
-                            )
+                        if (handlePipelineCheckpoint(transition.state)) {
                             return
                         }
                     }
@@ -523,7 +570,7 @@ class AgentChatViewModel
                 branchesToRun.map { branch ->
                     val preparedPrompt =
                         AgentChatMemoryPromptBuilder.build(
-                            latestUserMessage = branch.buildPrompt(),
+                            latestUserMessage = branch.buildPrompt(taskState.stage),
                             chatMessages = emptyList(),
                             memory = currentState.memory,
                             invariants = currentState.invariants,
@@ -928,6 +975,41 @@ class AgentChatViewModel
                 }
             persistHistory(updatedState)
         }
+
+        private fun handlePipelineCheckpoint(taskState: AgentTaskState): Boolean =
+            when (taskState.status) {
+                AgentTaskStatus.DONE -> {
+                    replaceLoadingMessage(
+                        taskState.finalAnswer
+                            .orEmpty()
+                            .ifBlank { "Task completed." },
+                    )
+                    true
+                }
+                AgentTaskStatus.WAITING_FOR_USER -> {
+                    replaceLoadingMessage(taskState.waitingForUserMessage())
+                    true
+                }
+                else -> false
+            }
+
+        private fun AgentTaskState.waitingForUserMessage(): String =
+            when (waitingReason) {
+                AgentTaskWaitingReason.PLAN_APPROVAL ->
+                    "Task plan is ready for review. Approve the plan to continue execution, or request a plan revision."
+                AgentTaskWaitingReason.VALIDATION_APPROVAL ->
+                    when (validationOutcome) {
+                        AgentValidationOutcome.PASS ->
+                            "Validation passed. Accept validation to produce the final answer, or request an execution revision."
+                        AgentValidationOutcome.NEEDS_REVISION ->
+                            "Validation found required fixes. Request an execution revision before producing the final answer."
+                        AgentValidationOutcome.BLOCKED ->
+                            "Validation is blocked. Review the validation report and request an execution revision."
+                        AgentValidationOutcome.UNKNOWN ->
+                            "Validation needs review, but no structured PASS outcome was found. Request an execution revision."
+                    }
+                AgentTaskWaitingReason.NONE -> expectedActionTitle
+            }
 
         private fun updateStateAndPersist(transform: (AgentChatUiState) -> AgentChatUiState) {
             val updatedState = mutableUiState.updateAndGet(transform)

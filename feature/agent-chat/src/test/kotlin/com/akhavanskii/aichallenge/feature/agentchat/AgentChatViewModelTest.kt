@@ -150,6 +150,10 @@ class AgentChatViewModelTest {
             viewModel.onAction(AgentChatAction.InputChanged("  Hello\nGemini  "))
             viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
+            viewModel.onAction(AgentChatAction.ApprovePlan)
+            runCurrent()
+            viewModel.onAction(AgentChatAction.AcceptValidation)
+            runCurrent()
 
             assertEquals("", viewModel.uiState.value.input)
             assertFalse(viewModel.uiState.value.canRunTask)
@@ -163,6 +167,14 @@ class AgentChatViewModelTest {
             assertEquals(
                 listOf(
                     AgentChatMessage(role = AgentChatRole.USER, text = "Hello Gemini"),
+                    AgentChatMessage(
+                        role = AgentChatRole.MODEL,
+                        text = "Task plan is ready for review. Approve the plan to continue execution, or request a plan revision.",
+                    ),
+                    AgentChatMessage(
+                        role = AgentChatRole.MODEL,
+                        text = "Validation passed. Accept validation to produce the final answer, or request an execution revision.",
+                    ),
                     AgentChatMessage(role = AgentChatRole.MODEL, text = "Final answer"),
                 ),
                 viewModel.uiState.value.messages,
@@ -262,8 +274,12 @@ class AgentChatViewModelTest {
                             listOf(
                                 CompletableDeferred(GeminiResult.Success("Use React Native for the screen.")),
                                 CompletableDeferred(GeminiResult.Success("Use Kotlin and Jetpack Compose for the screen.")),
-                                CompletableDeferred(GeminiResult.Success("Invariant check: passed")),
-                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                                CompletableDeferred(GeminiResult.Success("Validation intent")),
+                                CompletableDeferred(GeminiResult.Success("Validation constraints")),
+                                CompletableDeferred(GeminiResult.Success("Validation context")),
+                                CompletableDeferred(GeminiResult.Success("Validation solution")),
+                                CompletableDeferred(GeminiResult.Success("Validation review")),
+                                CompletableDeferred(GeminiResult.Success("Validation outcome: PASS\nInvariant check: passed")),
                             ),
                         ),
                 )
@@ -279,7 +295,7 @@ class AgentChatViewModelTest {
             runCurrent()
 
             val taskState = viewModel.uiState.value.memory.taskState
-            assertEquals(4, fakeAgent.calls.size)
+            assertEquals(8, fakeAgent.calls.size)
             assertTrue(
                 (fakeAgent.calls[1].messages.last() as AgentMessage.User)
                     .text
@@ -290,7 +306,8 @@ class AgentChatViewModelTest {
                 taskState.artifact(AgentTaskArtifactType.EXECUTION_DRAFT)?.text,
             )
             assertEquals(AgentChatInvariantCheckStatus.REPAIRED, viewModel.uiState.value.lastInvariantCheck.status)
-            assertEquals(AgentTaskStatus.DONE, taskState.status)
+            assertEquals(AgentTaskStatus.WAITING_FOR_USER, taskState.status)
+            assertEquals(AgentValidationOutcome.PASS, taskState.validationOutcome)
         }
 
     @Test
@@ -518,20 +535,7 @@ class AgentChatViewModelTest {
     @Test
     fun startTaskRunsFormalPipelineAndStoresArtifacts() =
         runTest {
-            val fakeAgent =
-                FakeLlmAgent(
-                    results =
-                        ArrayDeque(
-                            listOf(
-                                CompletableDeferred(GeminiResult.Success("Requirements report")),
-                                CompletableDeferred(GeminiResult.Success("Risks report")),
-                                CompletableDeferred(GeminiResult.Success("Task spec")),
-                                CompletableDeferred(GeminiResult.Success("Draft result")),
-                                CompletableDeferred(GeminiResult.Success("Validation report")),
-                                CompletableDeferred(GeminiResult.Success("Final answer")),
-                            ),
-                        ),
-                )
+            val fakeAgent = FakeLlmAgent(results = successfulTaskResults())
             val historyStore = FakeAgentChatHistoryStore()
             val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
             runCurrent()
@@ -539,21 +543,18 @@ class AgentChatViewModelTest {
             viewModel.onAction(AgentChatAction.InputChanged("Build task state"))
             viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
+            viewModel.onAction(AgentChatAction.ApprovePlan)
+            runCurrent()
+            viewModel.onAction(AgentChatAction.AcceptValidation)
+            runCurrent()
 
             val taskState = viewModel.uiState.value.memory.taskState
-            assertEquals(6, fakeAgent.calls.size)
+            assertEquals(24, fakeAgent.calls.size)
             assertEquals(AgentTaskStatus.DONE, taskState.status)
-            assertEquals(
-                listOf(
-                    AgentTaskArtifactType.REQUIREMENTS_REPORT,
-                    AgentTaskArtifactType.RISKS_REPORT,
-                    AgentTaskArtifactType.TASK_SPEC,
-                    AgentTaskArtifactType.EXECUTION_DRAFT,
-                    AgentTaskArtifactType.VALIDATION_REPORT,
-                    AgentTaskArtifactType.FINAL_ANSWER,
-                ),
-                taskState.artifacts.map { it.type },
-            )
+            assertTrue(taskState.artifacts.any { it.type == AgentTaskArtifactType.TASK_SPEC })
+            assertTrue(taskState.artifacts.any { it.type == AgentTaskArtifactType.EXECUTION_DRAFT })
+            assertTrue(taskState.artifacts.any { it.type == AgentTaskArtifactType.VALIDATION_REPORT })
+            assertTrue(taskState.artifacts.any { it.type == AgentTaskArtifactType.FINAL_ANSWER })
             assertEquals(
                 AgentChatMessage(role = AgentChatRole.MODEL, text = "Final answer"),
                 viewModel.uiState.value.messages
@@ -577,7 +578,7 @@ class AgentChatViewModelTest {
             viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
 
-            assertEquals(2, fakeAgent.calls.size)
+            assertEquals(5, fakeAgent.calls.size)
             assertEquals(AgentTaskStatus.RUNNING, viewModel.uiState.value.memory.taskState.status)
 
             viewModel.onAction(AgentChatAction.PauseTask)
@@ -613,13 +614,13 @@ class AgentChatViewModelTest {
                     results =
                         ArrayDeque(
                             listOf(
-                                CompletableDeferred(GeminiResult.Success("Requirements report")),
+                                CompletableDeferred(GeminiResult.Success("Intent report")),
                                 CompletableDeferred(GeminiResult.Failure(GeminiNetworkError.MissingApiKey)),
-                                CompletableDeferred(GeminiResult.Success("Recovered risks report")),
+                                CompletableDeferred(GeminiResult.Success("Context report")),
+                                CompletableDeferred(GeminiResult.Success("Solution report")),
+                                CompletableDeferred(GeminiResult.Success("Review report")),
+                                CompletableDeferred(GeminiResult.Success("Recovered constraints report")),
                                 CompletableDeferred(GeminiResult.Success("Task spec")),
-                                CompletableDeferred(GeminiResult.Success("Draft result")),
-                                CompletableDeferred(GeminiResult.Success("Validation report")),
-                                CompletableDeferred(GeminiResult.Success("Final answer")),
                             ),
                         ),
                 )
@@ -631,19 +632,19 @@ class AgentChatViewModelTest {
             runCurrent()
 
             val failedState = viewModel.uiState.value.memory.taskState
-            assertEquals(2, fakeAgent.calls.size)
+            assertEquals(5, fakeAgent.calls.size)
             assertEquals(AgentTaskStatus.FAILED, failedState.status)
-            assertEquals("Requirements report", failedState.artifact(AgentTaskArtifactType.REQUIREMENTS_REPORT)?.text)
-            assertEquals(AgentTaskBranchStatus.DONE, failedState.branches.first { it.id == AgentTaskBranchId.REQUIREMENTS }.status)
-            assertEquals(AgentTaskBranchStatus.FAILED, failedState.branches.first { it.id == AgentTaskBranchId.RISKS }.status)
+            assertEquals("Intent report", failedState.artifact(AgentTaskArtifactType.INTENT_REPORT)?.text)
+            assertEquals(AgentTaskBranchStatus.DONE, failedState.branches.first { it.id == AgentTaskBranchId.INTENT }.status)
+            assertEquals(AgentTaskBranchStatus.FAILED, failedState.branches.first { it.id == AgentTaskBranchId.CONSTRAINTS }.status)
 
             viewModel.onAction(AgentChatAction.RetryTask)
             runCurrent()
 
             assertEquals(7, fakeAgent.calls.size)
-            assertTrue((fakeAgent.calls[2].messages.last() as AgentMessage.User).text.contains("risks agent"))
-            assertEquals(AgentTaskStatus.DONE, viewModel.uiState.value.memory.taskState.status)
-            assertEquals("Final answer", viewModel.uiState.value.memory.taskState.finalAnswer)
+            assertTrue((fakeAgent.calls[5].messages.last() as AgentMessage.User).text.contains("constraints specialist"))
+            assertEquals(AgentTaskStatus.WAITING_FOR_USER, viewModel.uiState.value.memory.taskState.status)
+            assertEquals(AgentTaskWaitingReason.PLAN_APPROVAL, viewModel.uiState.value.memory.taskState.waitingReason)
         }
 
     @Test
@@ -656,23 +657,8 @@ class AgentChatViewModelTest {
                     stage = AgentTaskStage.EXECUTION,
                     step = AgentTaskStep.CREATE_DRAFT,
                     status = AgentTaskStatus.PAUSED,
-                    branches =
-                        listOf(
-                            AgentTaskBranch(
-                                id = AgentTaskBranchId.REQUIREMENTS,
-                                expectedArtifactType = AgentTaskArtifactType.REQUIREMENTS_REPORT,
-                                status = AgentTaskBranchStatus.DONE,
-                            ),
-                            AgentTaskBranch(
-                                id = AgentTaskBranchId.RISKS,
-                                expectedArtifactType = AgentTaskArtifactType.RISKS_REPORT,
-                                status = AgentTaskBranchStatus.DONE,
-                            ),
-                        ),
                     artifacts =
                         listOf(
-                            AgentTaskArtifact(AgentTaskArtifactType.REQUIREMENTS_REPORT, "Requirements report"),
-                            AgentTaskArtifact(AgentTaskArtifactType.RISKS_REPORT, "Risks report"),
                             AgentTaskArtifact(AgentTaskArtifactType.TASK_SPEC, "Task spec"),
                         ),
                 )
@@ -688,8 +674,12 @@ class AgentChatViewModelTest {
                         ArrayDeque(
                             listOf(
                                 CompletableDeferred(GeminiResult.Success("Draft result")),
-                                CompletableDeferred(GeminiResult.Success("Validation report")),
-                                CompletableDeferred(GeminiResult.Success("Final answer")),
+                                CompletableDeferred(GeminiResult.Success("Validation intent")),
+                                CompletableDeferred(GeminiResult.Success("Validation constraints")),
+                                CompletableDeferred(GeminiResult.Success("Validation context")),
+                                CompletableDeferred(GeminiResult.Success("Validation solution")),
+                                CompletableDeferred(GeminiResult.Success("Validation review")),
+                                CompletableDeferred(GeminiResult.Success("Validation outcome: PASS\nValidation report")),
                             ),
                         ),
                 )
@@ -699,7 +689,7 @@ class AgentChatViewModelTest {
             viewModel.onAction(AgentChatAction.ResumeTask)
             runCurrent()
 
-            assertEquals(3, fakeAgent.calls.size)
+            assertEquals(7, fakeAgent.calls.size)
             assertTrue(
                 (
                     fakeAgent.calls
@@ -708,18 +698,36 @@ class AgentChatViewModelTest {
                         .last() as AgentMessage.User
                 ).text.contains("execution"),
             )
-            assertEquals(AgentTaskStatus.DONE, viewModel.uiState.value.memory.taskState.status)
-            assertEquals("Final answer", viewModel.uiState.value.memory.taskState.finalAnswer)
+            assertEquals(AgentTaskStatus.WAITING_FOR_USER, viewModel.uiState.value.memory.taskState.status)
+            assertEquals(AgentTaskWaitingReason.VALIDATION_APPROVAL, viewModel.uiState.value.memory.taskState.waitingReason)
         }
 
     private fun successfulTaskResults(): ArrayDeque<CompletableDeferred<AgentResult<String>>> =
         ArrayDeque(
             listOf(
-                CompletableDeferred(GeminiResult.Success("Requirements report")),
-                CompletableDeferred(GeminiResult.Success("Risks report")),
+                CompletableDeferred(GeminiResult.Success("Planning intent report")),
+                CompletableDeferred(GeminiResult.Success("Planning constraints report")),
+                CompletableDeferred(GeminiResult.Success("Planning context report")),
+                CompletableDeferred(GeminiResult.Success("Planning solution report")),
+                CompletableDeferred(GeminiResult.Success("Planning review report")),
                 CompletableDeferred(GeminiResult.Success("Task spec")),
+                CompletableDeferred(GeminiResult.Success("Execution intent report")),
+                CompletableDeferred(GeminiResult.Success("Execution constraints report")),
+                CompletableDeferred(GeminiResult.Success("Execution context report")),
+                CompletableDeferred(GeminiResult.Success("Execution solution report")),
+                CompletableDeferred(GeminiResult.Success("Execution review report")),
                 CompletableDeferred(GeminiResult.Success("Draft result")),
-                CompletableDeferred(GeminiResult.Success("Validation report")),
+                CompletableDeferred(GeminiResult.Success("Validation intent report")),
+                CompletableDeferred(GeminiResult.Success("Validation constraints report")),
+                CompletableDeferred(GeminiResult.Success("Validation context report")),
+                CompletableDeferred(GeminiResult.Success("Validation solution report")),
+                CompletableDeferred(GeminiResult.Success("Validation review report")),
+                CompletableDeferred(GeminiResult.Success("Validation outcome: PASS\nValidation report")),
+                CompletableDeferred(GeminiResult.Success("Final intent report")),
+                CompletableDeferred(GeminiResult.Success("Final constraints report")),
+                CompletableDeferred(GeminiResult.Success("Final context report")),
+                CompletableDeferred(GeminiResult.Success("Final solution report")),
+                CompletableDeferred(GeminiResult.Success("Final review report")),
                 CompletableDeferred(GeminiResult.Success("Final answer")),
             ),
         )
@@ -747,23 +755,8 @@ class AgentChatViewModelTest {
             stage = AgentTaskStage.EXECUTION,
             step = AgentTaskStep.CREATE_DRAFT,
             status = AgentTaskStatus.PAUSED,
-            branches =
-                listOf(
-                    AgentTaskBranch(
-                        id = AgentTaskBranchId.REQUIREMENTS,
-                        expectedArtifactType = AgentTaskArtifactType.REQUIREMENTS_REPORT,
-                        status = AgentTaskBranchStatus.DONE,
-                    ),
-                    AgentTaskBranch(
-                        id = AgentTaskBranchId.RISKS,
-                        expectedArtifactType = AgentTaskArtifactType.RISKS_REPORT,
-                        status = AgentTaskBranchStatus.DONE,
-                    ),
-                ),
             artifacts =
                 listOf(
-                    AgentTaskArtifact(AgentTaskArtifactType.REQUIREMENTS_REPORT, "Requirements report"),
-                    AgentTaskArtifact(AgentTaskArtifactType.RISKS_REPORT, "Risks report"),
                     AgentTaskArtifact(AgentTaskArtifactType.TASK_SPEC, "Task spec"),
                 ),
         )

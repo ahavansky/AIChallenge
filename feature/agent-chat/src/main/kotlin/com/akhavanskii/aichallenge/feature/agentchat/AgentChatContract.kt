@@ -46,6 +46,18 @@ data class AgentChatUiState(
     val canRetryTask: Boolean
         get() = !isLoading && memory.taskState.canRetry
 
+    val canApprovePlan: Boolean
+        get() = !isLoading && memory.taskState.canApprovePlan
+
+    val canRequestPlanRevision: Boolean
+        get() = !isLoading && memory.taskState.canRequestPlanRevision
+
+    val canAcceptValidation: Boolean
+        get() = !isLoading && memory.taskState.canAcceptValidation
+
+    val canRequestExecutionRevision: Boolean
+        get() = !isLoading && memory.taskState.canRequestExecutionRevision
+
     val canResetTask: Boolean
         get() = !isLoading && memory.taskState.canReset
 
@@ -87,6 +99,12 @@ enum class AgentChatModelOption(
         title = "Gemini 2.5 Flash-Lite",
         compactTitle = "2.5 Lite",
         description = "Lower-latency Gemini model for simpler or more iterative tasks.",
+    ),
+    GEMMA_4_31B_IT(
+        modelName = "gemma-4-31b-it",
+        title = "Gemma 4 31B IT",
+        compactTitle = "4 31B",
+        description = "Free Gemma 4 dense model for stronger open-model reasoning.",
     ),
     ;
 
@@ -191,6 +209,14 @@ sealed interface AgentChatAction : UiEvent {
     data object ResumeTask : AgentChatAction
 
     data object RetryTask : AgentChatAction
+
+    data object ApprovePlan : AgentChatAction
+
+    data object RequestPlanRevision : AgentChatAction
+
+    data object AcceptValidation : AgentChatAction
+
+    data object RequestExecutionRevision : AgentChatAction
 
     data object ResetTask : AgentChatAction
 
