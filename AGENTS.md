@@ -24,6 +24,14 @@ rtk ./gradlew testDebugUnitTest
 rtk ./gradlew ktlintCheck lintDebug
 ```
 
+## Стиль общения
+
+- Всегда используй `caveman` style по умолчанию для ответов в этом проекте.
+- Уровень по умолчанию: `full`.
+- Сохраняй язык пользователя: русский запрос - русский ответ, английский запрос - английский ответ.
+- Не объявляй режим отдельной фразой вроде "caveman mode on".
+- Выключай `caveman` только если пользователь явно попросил `stop caveman`, `normal mode` или аналогичную обычную речь.
+
 ## Документация и проверка API
 
 - При изменениях Android API, Compose, Hilt, Navigation, Gradle, screenshot testing или emulator workflow проверяй актуальную документацию через Android CLI:
