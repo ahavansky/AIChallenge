@@ -63,10 +63,19 @@ android {
             .get()
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
+    val deepSeekApiKey =
+        providers
+            .gradleProperty("DEEPSEEK_API_KEY")
+            .orElse(providers.environmentVariable("DEEPSEEK_API_KEY"))
+            .orElse(localProperties.getProperty("DEEPSEEK_API_KEY") ?: "")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
 
     defaultConfig {
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         buildConfigField("String", "HUGGINGFACE_API_KEY", "\"$huggingFaceApiKey\"")
+        buildConfigField("String", "DEEPSEEK_API_KEY", "\"$deepSeekApiKey\"")
     }
 
     packaging {

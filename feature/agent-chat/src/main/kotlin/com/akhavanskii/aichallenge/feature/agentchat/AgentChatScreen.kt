@@ -409,11 +409,12 @@ private fun TaskStatePanel(
                         val isExpanded = index in expandedArtifacts.value
                         Surface(
                             onClick = {
-                                expandedArtifacts.value = if (isExpanded) {
-                                    expandedArtifacts.value - index
-                                } else {
-                                    expandedArtifacts.value + index
-                                }
+                                expandedArtifacts.value =
+                                    if (isExpanded) {
+                                        expandedArtifacts.value - index
+                                    } else {
+                                        expandedArtifacts.value + index
+                                    }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),

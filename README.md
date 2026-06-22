@@ -1,17 +1,17 @@
 # AIChallenge
 
-AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Compose, Material 3, Hilt, coroutines, direct Gemini REST integration, and HuggingFace Router calls for challenge/demo use.
+AIChallenge is a single-activity Android 12+ app built with Kotlin, Jetpack Compose, Material 3, Hilt, coroutines, direct Gemini and DeepSeek REST integration, and HuggingFace Router calls for challenge/demo use.
 
 ## Architecture
 
-The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a `LlmAgent`, which owns Gemini prompt validation, chat request creation, token usage collection, HTTP execution, response parsing, retries, and user-facing error mapping. Context Agent is a separate context-strategy lab that compares Sliding Window, Sticky Facts, and Branching without summaries. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
+The app uses unidirectional data flow. Compose renders immutable UI state from feature ViewModels; user actions flow back to the ViewModel; ViewModels update `StateFlow` after delegating LLM work to focused network abstractions. On submit, the home screen starts two Gemini requests in parallel: one with the user's `generationConfig`, and one baseline request without extra generation parameters. Agent Chat is a separate chat feature that talks to a routed `LlmAgent`, which owns provider selection, prompt validation, chat request creation, HTTP execution, response parsing, retries, and user-facing error mapping. Context Agent is a separate context-strategy lab that compares Sliding Window, Sticky Facts, and Branching without summaries. Prompt Lab starts four prompting strategies and then asks Gemini to compare their outputs. Temperature Lab starts three requests with different `temperature` values and then asks Gemini to evaluate which setting fits which task types. HuggingFace Lab starts three HuggingFace model requests, records response time and token usage, and then asks the selected Gemini model to compare quality, speed, and resource usage.
 
 Modules:
 
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core:network` - OkHttp Gemini agent/client and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
+- `:core:network` - OkHttp Gemini, DeepSeek, and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
 - `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
@@ -49,6 +49,14 @@ HuggingFace Lab reads a HuggingFace token from `HUGGINGFACE_API_KEY` or `HF_TOKE
 
 The screen uses HuggingFace Router's OpenAI-compatible chat completions endpoint: `https://router.huggingface.co/v1/chat/completions`. HuggingFace free access is credit-based and provider/model availability can change, so a model may fail if the token has no credits or the provider route is unavailable.
 
+Agent Chat reads a DeepSeek API key from `DEEPSEEK_API_KEY` when a DeepSeek model is selected:
+
+- `local.properties`: `DEEPSEEK_API_KEY=your_deepseek_key`
+- Gradle property: `./gradlew assembleDebug -PDEEPSEEK_API_KEY=your_deepseek_key`
+- Environment variable: `DEEPSEEK_API_KEY=your_deepseek_key ./gradlew assembleDebug`
+
+DeepSeek Agent Chat models use DeepSeek's OpenAI-compatible chat completions endpoint: `https://api.deepseek.com/chat/completions`. They are not sent through Gemini `generateContent`.
+
 ## Gemini Parameter Comparison
 
 The home screen exposes Gemini `generationConfig` controls for `responseMimeType`, `responseSchema`, `maxOutputTokens`, `stopSequences`, `temperature`, `topP`, `topK`, `candidateCount`, `presencePenalty`, and `frequencyPenalty`. Numeric controls use sliders; each control includes a detailed UI explanation with boundary values:
@@ -80,6 +88,9 @@ Agent Chat has a compact header model selector. The selected model is saved in `
 - `gemini-3.5-flash` - default project model.
 - `gemini-2.5-flash` - balanced Gemini model for everyday reasoning and implementation tasks.
 - `gemini-2.5-flash-lite` - lower-latency Gemini model for simpler or more iterative tasks.
+- `deepseek-v4-flash` - lower-latency DeepSeek model for iterative agent chat tasks.
+- `deepseek-v4-pro` - higher-capability DeepSeek model for more demanding agent chat tasks.
+- `gemma-4-31b-it` - free Gemma 4 dense model for stronger open-model reasoning.
 
 `Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Each stage begins with five parallel specialist branches for intent, constraints, context, solution strategy, and review; an orchestrator step then synthesizes the specialist artifacts into the stage artifact. The app gates transitions in code: execution cannot start until the user approves the task spec, finalization cannot start until validation reports `PASS` and the user accepts it, and invalid jumps are rejected with local errors. Plan revision returns to planning, execution revision returns to execution, and validation outcomes are stored explicitly as `PASS`, `NEEDS_REVISION`, `BLOCKED`, or `UNKNOWN`. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed specialist branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes invariants before formal task state and editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. Hard invariant conflicts in user requests are refused locally before Gemini is called. Model outputs are checked before they are stored as typed artifacts; a hard invariant violation gets one repair request, and a repeated violation fails the current task step. The screen shows the current stage, step, branch status, waiting reason, validation outcome, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
 

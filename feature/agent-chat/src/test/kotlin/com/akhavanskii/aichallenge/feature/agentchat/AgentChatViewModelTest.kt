@@ -201,17 +201,17 @@ class AgentChatViewModelTest {
             val viewModel = createViewModel(fakeAgent = fakeAgent, historyStore = historyStore)
             runCurrent()
 
-            viewModel.onAction(AgentChatAction.ModelChanged(AgentChatModelOption.GEMINI_2_5_FLASH_LITE))
+            viewModel.onAction(AgentChatAction.ModelChanged(AgentChatModelOption.DEEPSEEK_V4_FLASH))
             runCurrent()
             viewModel.onAction(AgentChatAction.InputChanged("Create a compact plan"))
             viewModel.onAction(AgentChatAction.StartTask)
             runCurrent()
 
-            assertEquals(AgentChatModelOption.GEMINI_2_5_FLASH_LITE, viewModel.uiState.value.selectedModel)
-            assertEquals(AgentChatModelOption.GEMINI_2_5_FLASH_LITE, historyStore.snapshot.selectedModel)
+            assertEquals(AgentChatModelOption.DEEPSEEK_V4_FLASH, viewModel.uiState.value.selectedModel)
+            assertEquals(AgentChatModelOption.DEEPSEEK_V4_FLASH, historyStore.snapshot.selectedModel)
             assertTrue(
                 fakeAgent.calls.all { call ->
-                    call.modelName == AgentChatModelOption.GEMINI_2_5_FLASH_LITE.modelName
+                    call.modelName == AgentChatModelOption.DEEPSEEK_V4_FLASH.modelName
                 },
             )
         }

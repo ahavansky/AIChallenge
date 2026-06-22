@@ -29,7 +29,7 @@ annotation class HuggingFaceCallFactory
 interface NetworkBindings {
     @Binds
     @Singleton
-    fun bindLlmAgent(agent: GeminiAgent): LlmAgent
+    fun bindLlmAgent(agent: RoutingLlmAgent): LlmAgent
 
     @Binds
     @Singleton
@@ -85,6 +85,10 @@ object NetworkModule {
     @Provides
     @Named(HUGGINGFACE_ENDPOINT_NAME)
     fun provideHuggingFaceEndpoint(): String = HUGGINGFACE_CHAT_COMPLETIONS_ENDPOINT
+
+    @Provides
+    @Named(DEEPSEEK_ENDPOINT_NAME)
+    fun provideDeepSeekEndpoint(): String = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
 
     @Provides
     @NetworkDispatcher

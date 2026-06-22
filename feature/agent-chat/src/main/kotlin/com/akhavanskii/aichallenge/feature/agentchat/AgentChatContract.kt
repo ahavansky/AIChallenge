@@ -100,6 +100,18 @@ enum class AgentChatModelOption(
         compactTitle = "2.5 Lite",
         description = "Lower-latency Gemini model for simpler or more iterative tasks.",
     ),
+    DEEPSEEK_V4_FLASH(
+        modelName = "deepseek-v4-flash",
+        title = "DeepSeek V4 Flash",
+        compactTitle = "V4 Flash",
+        description = "Lower-latency DeepSeek model for iterative agent chat tasks.",
+    ),
+    DEEPSEEK_V4_PRO(
+        modelName = "deepseek-v4-pro",
+        title = "DeepSeek V4 Pro",
+        compactTitle = "V4 Pro",
+        description = "Higher-capability DeepSeek model for more demanding agent chat tasks.",
+    ),
     GEMMA_4_31B_IT(
         modelName = "gemma-4-31b-it",
         title = "Gemma 4 31B IT",

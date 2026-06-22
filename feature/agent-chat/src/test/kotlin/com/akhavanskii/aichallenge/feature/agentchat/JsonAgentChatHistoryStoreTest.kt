@@ -90,14 +90,14 @@ class JsonAgentChatHistoryStoreTest {
             val store = createStore(historyFile, StandardTestDispatcher(testScheduler))
             val snapshot =
                 AgentChatHistorySnapshot(
-                    selectedModel = AgentChatModelOption.GEMINI_2_5_FLASH_LITE,
-                    messages = listOf(AgentChatMessage(role = AgentChatRole.USER, text = "Use lite")),
+                    selectedModel = AgentChatModelOption.DEEPSEEK_V4_PRO,
+                    messages = listOf(AgentChatMessage(role = AgentChatRole.USER, text = "Use pro")),
                 )
 
             store.save(snapshot)
 
             assertEquals(snapshot, store.load())
-            assertTrue(historyFile.readText().contains(AgentChatModelOption.GEMINI_2_5_FLASH_LITE.modelName))
+            assertTrue(historyFile.readText().contains(AgentChatModelOption.DEEPSEEK_V4_PRO.modelName))
         }
 
     @Test
