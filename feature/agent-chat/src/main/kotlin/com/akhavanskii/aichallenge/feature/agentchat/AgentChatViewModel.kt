@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.akhavanskii.aichallenge.core.network.AgentMessage
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.LlmAgent
+import com.akhavanskii.aichallenge.core.network.McpClient
+import com.akhavanskii.aichallenge.core.network.McpDiscoveryResult
+import com.akhavanskii.aichallenge.core.network.McpToolDiscovery
 import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -29,6 +32,7 @@ class AgentChatViewModel
         private val longTermMemoryStore: AgentChatLongTermMemoryStore,
         private val userProfileStore: AgentChatUserProfileStore,
         private val invariantStore: AgentChatInvariantStore,
+        private val mcpClient: McpClient,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
@@ -80,6 +84,7 @@ class AgentChatViewModel
                 AgentChatAction.ClearChat -> clearChat()
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
+                AgentChatAction.ListFetchTools -> listFetchTools()
                 AgentChatAction.AcceptValidation -> acceptValidation()
                 AgentChatAction.ApprovePlan -> approvePlan()
                 AgentChatAction.PauseTask -> pauseTask()
@@ -807,6 +812,36 @@ class AgentChatViewModel
             }
         }
 
+        private fun listFetchTools() {
+            val currentState = mutableUiState.value
+            if (!currentState.canListFetchTools) return
+
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(
+                        messages =
+                            current.messages +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Connecting to Fetch MCP...",
+                                    isLoading = true,
+                                ),
+                        compareResults = emptyList(),
+                    )
+                }
+            persistHistory(updatedState)
+
+            launchActiveRequest { requestId ->
+                val result = mcpClient.listTools()
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+
+                when (result) {
+                    is McpDiscoveryResult.Success -> replaceLoadingMessage(result.value.formatFetchToolsMessage())
+                    is McpDiscoveryResult.Failure -> replaceLoadingMessage(result.error.userMessage, isError = true)
+                }
+            }
+        }
+
         private suspend fun sendInvariantCheckedMessage(
             preparedPrompt: AgentChatPreparedPrompt,
             invariants: AgentChatInvariantSet,
@@ -1009,6 +1044,51 @@ class AgentChatViewModel
                             "Validation needs review, but no structured PASS outcome was found. Request an execution revision."
                     }
                 AgentTaskWaitingReason.NONE -> expectedActionTitle
+            }
+
+        private fun McpToolDiscovery.formatFetchToolsMessage(): String =
+            buildString {
+                append("Fetch MCP connected")
+                serverInfo?.let { info ->
+                    append(" to ")
+                    append(info.name)
+                    info.version
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { version -> append(" $version") }
+                }
+                append(".")
+
+                if (!toolsCapabilityAdvertised) {
+                    append("\n\nConnected, but server does not advertise tools.")
+                    return@buildString
+                }
+                if (tools.isEmpty()) {
+                    append("\n\nConnected, but no tools returned.")
+                    return@buildString
+                }
+
+                append("\n\nAvailable MCP tools:")
+                tools.forEach { tool ->
+                    append("\n- `")
+                    append(tool.name)
+                    append("`")
+                    tool.title
+                        ?.takeIf { it.isNotBlank() && it != tool.name }
+                        ?.let { title ->
+                            append(" - ")
+                            append(title)
+                        }
+                    tool.description
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { description ->
+                            append("\n  ")
+                            append(description)
+                        }
+                    if (tool.requiredInputNames.isNotEmpty()) {
+                        append("\n  Required args: ")
+                        append(tool.requiredInputNames.joinToString { "`$it`" })
+                    }
+                }
             }
 
         private fun updateStateAndPersist(transform: (AgentChatUiState) -> AgentChatUiState) {

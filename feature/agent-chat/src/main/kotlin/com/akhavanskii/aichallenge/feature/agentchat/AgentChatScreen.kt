@@ -208,6 +208,13 @@ fun AgentChatScreen(
                     Text("Run task")
                 }
                 TextButton(
+                    onClick = { onAction(AgentChatAction.ListFetchTools) },
+                    enabled = state.canListFetchTools,
+                    modifier = Modifier.testTag(AgentChatTags.MCP_TOOLS_BUTTON),
+                ) {
+                    Text("List MCP tools")
+                }
+                TextButton(
                     onClick = { onAction(AgentChatAction.ClearChat) },
                     enabled = state.canClear,
                     modifier = Modifier.testTag(AgentChatTags.CLEAR_BUTTON),
@@ -1499,6 +1506,7 @@ object AgentChatTags {
     const val MODEL_MENU_BUTTON = "agent_chat_model_menu_button"
     const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
+    const val MCP_TOOLS_BUTTON = "agent_chat_mcp_tools_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
     const val TASK_STATE = "agent_chat_task_state"

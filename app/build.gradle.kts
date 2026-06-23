@@ -71,11 +71,20 @@ android {
             .get()
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
+    val mcpFetchServerUrl =
+        providers
+            .gradleProperty("MCP_FETCH_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_FETCH_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_FETCH_SERVER_URL") ?: "")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
 
     defaultConfig {
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         buildConfigField("String", "HUGGINGFACE_API_KEY", "\"$huggingFaceApiKey\"")
         buildConfigField("String", "DEEPSEEK_API_KEY", "\"$deepSeekApiKey\"")
+        buildConfigField("String", "MCP_FETCH_SERVER_URL", "\"$mcpFetchServerUrl\"")
     }
 
     packaging {

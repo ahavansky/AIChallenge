@@ -6,6 +6,12 @@ import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
 import com.akhavanskii.aichallenge.core.network.GeminiNetworkError
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.LlmAgent
+import com.akhavanskii.aichallenge.core.network.McpClient
+import com.akhavanskii.aichallenge.core.network.McpDiscoveryResult
+import com.akhavanskii.aichallenge.core.network.McpNetworkError
+import com.akhavanskii.aichallenge.core.network.McpServerInfo
+import com.akhavanskii.aichallenge.core.network.McpTool
+import com.akhavanskii.aichallenge.core.network.McpToolDiscovery
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
@@ -213,6 +219,114 @@ class AgentChatViewModelTest {
                 fakeAgent.calls.all { call ->
                     call.modelName == AgentChatModelOption.DEEPSEEK_V4_FLASH.modelName
                 },
+            )
+        }
+
+    @Test
+    fun listFetchToolsShowsToolListWithoutCallingLlm() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val fakeMcpClient =
+                FakeMcpClient(
+                    result =
+                        McpDiscoveryResult.Success(
+                            McpToolDiscovery(
+                                serverInfo = McpServerInfo(name = "fetch", version = "1.0.0"),
+                                toolsCapabilityAdvertised = true,
+                                tools =
+                                    listOf(
+                                        McpTool(
+                                            name = "fetch",
+                                            title = "Fetch",
+                                            description = "Fetches a URL from the internet.",
+                                            inputSchemaJson = """{"type":"object"}""",
+                                            requiredInputNames = listOf("url"),
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent = fakeAgent, mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ListFetchTools)
+            runCurrent()
+
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertFalse(message.isLoading)
+            assertFalse(message.isError)
+            assertTrue(message.text.contains("Fetch MCP connected to fetch 1.0.0."))
+            assertTrue(message.text.contains("`fetch`"))
+            assertTrue(message.text.contains("Required args: `url`"))
+            assertEquals(1, fakeMcpClient.callCount)
+            assertEquals(0, fakeAgent.calls.size)
+        }
+
+    @Test
+    fun listFetchToolsShowsErrorWithoutCallingLlm() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val fakeMcpClient = FakeMcpClient(result = McpDiscoveryResult.Failure(McpNetworkError.MissingEndpoint))
+            val viewModel = createViewModel(fakeAgent = fakeAgent, mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ListFetchTools)
+            runCurrent()
+
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertTrue(message.isError)
+            assertTrue(message.text.contains("MCP server URL is missing"))
+            assertEquals(1, fakeMcpClient.callCount)
+            assertEquals(0, fakeAgent.calls.size)
+        }
+
+    @Test
+    fun listFetchToolsIgnoresSecondRequestWhileLoading() =
+        runTest {
+            val pendingResult = CompletableDeferred<McpDiscoveryResult<McpToolDiscovery>>()
+            val fakeMcpClient = FakeMcpClient(results = ArrayDeque(listOf(pendingResult)))
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.ListFetchTools)
+            runCurrent()
+            viewModel.onAction(AgentChatAction.ListFetchTools)
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.callCount)
+            assertTrue(viewModel.uiState.value.isLoading)
+
+            pendingResult.complete(
+                McpDiscoveryResult.Success(
+                    McpToolDiscovery(
+                        serverInfo = null,
+                        toolsCapabilityAdvertised = true,
+                        tools = emptyList(),
+                    ),
+                ),
+            )
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.callCount)
+            assertFalse(viewModel.uiState.value.isLoading)
+            assertTrue(
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+                    .text
+                    .contains("Connected, but no tools returned."),
             )
         }
 
@@ -767,6 +881,7 @@ class AgentChatViewModelTest {
         longTermMemoryStore: AgentChatLongTermMemoryStore = FakeAgentChatLongTermMemoryStore(),
         userProfileStore: AgentChatUserProfileStore = FakeAgentChatUserProfileStore(),
         invariantStore: AgentChatInvariantStore = FakeAgentChatInvariantStore(),
+        mcpClient: McpClient = FakeMcpClient(),
     ): AgentChatViewModel =
         AgentChatViewModel(
             llmAgent = fakeAgent,
@@ -774,6 +889,7 @@ class AgentChatViewModelTest {
             longTermMemoryStore = longTermMemoryStore,
             userProfileStore = userProfileStore,
             invariantStore = invariantStore,
+            mcpClient = mcpClient,
         )
 
     private class FakeLlmAgent(
@@ -798,6 +914,33 @@ class AgentChatViewModelTest {
                     modelName = modelName,
                     totalTokenLimit = totalTokenLimit,
                 )
+            val result =
+                if (results.size > 1) {
+                    results.removeFirst()
+                } else {
+                    results.first()
+                }
+            return result.await()
+        }
+    }
+
+    private class FakeMcpClient(
+        result: McpDiscoveryResult<McpToolDiscovery> =
+            McpDiscoveryResult.Success(
+                McpToolDiscovery(
+                    serverInfo = null,
+                    toolsCapabilityAdvertised = true,
+                    tools = emptyList(),
+                ),
+            ),
+        private val results: ArrayDeque<CompletableDeferred<McpDiscoveryResult<McpToolDiscovery>>> =
+            ArrayDeque(listOf(CompletableDeferred(result))),
+    ) : McpClient {
+        var callCount = 0
+            private set
+
+        override suspend fun listTools(): McpDiscoveryResult<McpToolDiscovery> {
+            callCount += 1
             val result =
                 if (results.size > 1) {
                     results.removeFirst()

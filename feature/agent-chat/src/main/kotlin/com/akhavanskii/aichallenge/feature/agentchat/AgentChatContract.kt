@@ -67,6 +67,9 @@ data class AgentChatUiState(
     val canSaveInvariants: Boolean
         get() = isInvariantsDirty && !isLoading
 
+    val canListFetchTools: Boolean
+        get() = !isLoading
+
     val canClearTaskContext: Boolean
         get() = memory.taskContext.itemCount > 0 && !isLoading
 
@@ -237,6 +240,8 @@ sealed interface AgentChatAction : UiEvent {
     data object ClearChat : AgentChatAction
 
     data object ClearTaskContext : AgentChatAction
+
+    data object ListFetchTools : AgentChatAction
 
     data object SaveLongTermMemory : AgentChatAction
 

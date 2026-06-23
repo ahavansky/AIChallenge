@@ -85,6 +85,28 @@ class AgentChatScreenTest {
     }
 
     @Test
+    fun listMcpToolsButtonDispatchesAction() {
+        val actions = mutableListOf<AgentChatAction>()
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = AgentChatUiState(),
+                    onAction = { action -> actions += action },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule
+            .onNodeWithTag(AgentChatTags.MCP_TOOLS_BUTTON)
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+
+        assertEquals(AgentChatAction.ListFetchTools, actions.last())
+    }
+
+    @Test
     fun taskStatePanelShowsCurrentStepAndDispatchesContinue() {
         val pausedTaskState =
             AgentTaskState(

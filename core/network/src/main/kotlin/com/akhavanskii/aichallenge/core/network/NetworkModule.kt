@@ -38,6 +38,10 @@ interface NetworkBindings {
     @Binds
     @Singleton
     fun bindHuggingFaceTextClient(client: RestHuggingFaceTextClient): HuggingFaceTextClient
+
+    @Binds
+    @Singleton
+    fun bindMcpClient(client: RestMcpClient): McpClient
 }
 
 @Module

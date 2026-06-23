@@ -3,6 +3,7 @@ package com.akhavanskii.aichallenge
 import com.akhavanskii.aichallenge.core.network.DEEPSEEK_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.GEMINI_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.HUGGINGFACE_API_KEY_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_FETCH_SERVER_URL_NAME
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -23,4 +24,8 @@ object AppConfigModule {
     @Provides
     @Named(DEEPSEEK_API_KEY_NAME)
     fun provideDeepSeekApiKey(): String = BuildConfig.DEEPSEEK_API_KEY
+
+    @Provides
+    @Named(MCP_FETCH_SERVER_URL_NAME)
+    fun provideMcpFetchServerUrl(): String = BuildConfig.MCP_FETCH_SERVER_URL
 }

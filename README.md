@@ -11,7 +11,7 @@ Modules:
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core:network` - OkHttp Gemini, DeepSeek, and HuggingFace REST clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
+- `:core:network` - OkHttp Gemini, DeepSeek, HuggingFace, and MCP discovery clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
 - `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
@@ -57,6 +57,8 @@ Agent Chat reads a DeepSeek API key from `DEEPSEEK_API_KEY` when a DeepSeek mode
 
 DeepSeek Agent Chat models use DeepSeek's OpenAI-compatible chat completions endpoint: `https://api.deepseek.com/chat/completions`. They are not sent through Gemini `generateContent`.
 
+Agent Chat can list tools from a remote Streamable HTTP Fetch MCP server. Set `MCP_FETCH_SERVER_URL` through `local.properties`, a Gradle property, or an environment variable. The app only performs MCP `initialize`, `notifications/initialized`, and `tools/list`; it does not call Fetch tools or start a local stdio server.
+
 ## Gemini Parameter Comparison
 
 The home screen exposes Gemini `generationConfig` controls for `responseMimeType`, `responseSchema`, `maxOutputTokens`, `stopSequences`, `temperature`, `topP`, `topK`, `candidateCount`, `presencePenalty`, and `frequencyPenalty`. Numeric controls use sliders; each control includes a detailed UI explanation with boundary values:
@@ -93,6 +95,8 @@ Agent Chat has a compact header model selector. The selected model is saved in `
 - `gemma-4-31b-it` - free Gemma 4 dense model for stronger open-model reasoning.
 
 `Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Each stage begins with five parallel specialist branches for intent, constraints, context, solution strategy, and review; an orchestrator step then synthesizes the specialist artifacts into the stage artifact. The app gates transitions in code: execution cannot start until the user approves the task spec, finalization cannot start until validation reports `PASS` and the user accepts it, and invalid jumps are rejected with local errors. Plan revision returns to planning, execution revision returns to execution, and validation outcomes are stored explicitly as `PASS`, `NEEDS_REVISION`, `BLOCKED`, or `UNKNOWN`. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed specialist branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes invariants before formal task state and editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. Hard invariant conflicts in user requests are refused locally before Gemini is called. Model outputs are checked before they are stored as typed artifacts; a hard invariant violation gets one repair request, and a repeated violation fails the current task step. The screen shows the current stage, step, branch status, waiting reason, validation outcome, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
+
+`List MCP tools` is a local Agent Chat action. It connects to `MCP_FETCH_SERVER_URL`, discovers available MCP tools, and writes the returned tool names, descriptions, and required arguments into chat history without calling Gemini.
 
 ## Context Agent
 
