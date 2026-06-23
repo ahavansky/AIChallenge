@@ -85,12 +85,13 @@ class AgentChatScreenTest {
     }
 
     @Test
-    fun listMcpToolsButtonDispatchesAction() {
+    fun githubMcpButtonDispatchesAction() {
         val actions = mutableListOf<AgentChatAction>()
+        var state by mutableStateOf(AgentChatUiState(input = "square/okhttp"))
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {
                 AgentChatScreen(
-                    state = AgentChatUiState(),
+                    state = state,
                     onAction = { action -> actions += action },
                     onBack = {},
                 )
@@ -98,12 +99,12 @@ class AgentChatScreenTest {
         }
 
         composeRule
-            .onNodeWithTag(AgentChatTags.MCP_TOOLS_BUTTON)
+            .onNodeWithTag(AgentChatTags.GITHUB_MCP_BUTTON)
             .assertIsDisplayed()
             .assertIsEnabled()
             .performClick()
 
-        assertEquals(AgentChatAction.ListFetchTools, actions.last())
+        assertEquals(AgentChatAction.CallGitHubRepositoryTool, actions.last())
     }
 
     @Test
@@ -132,6 +133,9 @@ class AgentChatScreenTest {
         }
 
         composeRule.onNodeWithTag(AgentChatTags.TASK_STATE).assertIsDisplayed()
+        composeRule.onNodeWithText("Paused · Execution · Create draft result", substring = true).assertIsDisplayed()
+        composeRule.onAllNodesWithTag(AgentChatTags.RESUME_TASK_BUTTON).assertCountEquals(0)
+        composeRule.onNodeWithTag(AgentChatTags.TASK_STATE_TOGGLE).performClick()
         composeRule.onAllNodesWithText("Paused", substring = true).assertCountEquals(2)
         composeRule.onAllNodesWithText("Expected: Tap Continue task", substring = true).assertCountEquals(1)
         composeRule
@@ -397,7 +401,7 @@ class AgentChatScreenTest {
 
         composeRule.onNodeWithTag(AgentChatTags.INVARIANT_GUARD).assertIsDisplayed()
         composeRule.onNodeWithText("1 rules", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Last: Blocked before Gemini", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Last: Blocked before agent", substring = true).assertIsDisplayed()
 
         composeRule.onNodeWithTag(AgentChatTags.INVARIANT_GUARD_TOGGLE).performClick()
 
@@ -419,7 +423,7 @@ class AgentChatScreenTest {
             .performClick()
 
         composeRule.onNodeWithTag("${AgentChatTags.INVARIANT_TAB_PREFIX}_last_check").performClick()
-        composeRule.onNodeWithText("Status: Blocked before Gemini", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Status: Blocked before agent", substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag(AgentChatTags.INVARIANT_SAFE_ALTERNATIVE_BUTTON).performClick()
 
         assertTrue(actions.any { it is AgentChatAction.InvariantsChanged })
@@ -594,7 +598,7 @@ class AgentChatScreenTest {
                     messages =
                         listOf(
                             AgentChatMessage(role = AgentChatRole.USER, text = "Run long request"),
-                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting for Gemini", isLoading = true),
+                            AgentChatMessage(role = AgentChatRole.MODEL, text = "Waiting for agent", isLoading = true),
                         ),
                 ),
             )

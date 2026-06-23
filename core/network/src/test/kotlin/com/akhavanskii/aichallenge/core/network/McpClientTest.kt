@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -282,7 +284,7 @@ class McpClientTest {
 
             assertTrue(result is McpDiscoveryResult.Failure)
             assertEquals(
-                "Fetch MCP server returned JSON-RPC error -32601: Method not found.",
+                "MCP server returned JSON-RPC error -32601: Method not found.",
                 (result as McpDiscoveryResult.Failure).error.userMessage,
             )
         }
@@ -309,6 +311,147 @@ class McpClientTest {
 
             assertTrue(result is McpDiscoveryResult.Failure)
             assertTrue((result as McpDiscoveryResult.Failure).error is McpNetworkError.Network)
+        }
+
+    @Test
+    fun callToolInitializesAndReturnsTextContent() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    val body = request.bodyString()
+                    when {
+                        body.contains("\"method\":\"initialize\"") ->
+                            jsonResponse(
+                                request = request,
+                                body = initializedBody(),
+                                headers = mapOf("Mcp-Session-Id" to "session-1"),
+                            )
+                        body.contains("\"method\":\"notifications/initialized\"") -> emptyResponse(request)
+                        else -> {
+                            assertTrue(body.contains("\"method\":\"tools/call\""))
+                            assertTrue(body.contains("\"name\":\"github_repository_summary\""))
+                            assertTrue(body.contains("\"owner\":\"square\""))
+                            assertTrue(body.contains("\"repo\":\"okhttp\""))
+                            jsonResponse(
+                                request = request,
+                                body =
+                                    """
+                                    {
+                                      "jsonrpc": "2.0",
+                                      "id": 2,
+                                      "result": {
+                                        "content": [
+                                          {"type": "text", "text": "Full name: square/okhttp"}
+                                        ]
+                                      }
+                                    }
+                                    """.trimIndent(),
+                            )
+                        }
+                    }
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.callTool(
+                    name = "github_repository_summary",
+                    arguments =
+                        buildJsonObject {
+                            put("owner", "square")
+                            put("repo", "okhttp")
+                        },
+                )
+
+            assertTrue(result is McpToolCallResult.Success)
+            val call = (result as McpToolCallResult.Success).value
+            assertEquals("github_repository_summary", call.name)
+            assertEquals("Full name: square/okhttp", call.contentText)
+            assertEquals(false, call.isError)
+            assertEquals("session-1", factory.requests[2].header("Mcp-Session-Id"))
+        }
+
+    @Test
+    fun callToolParsesToolErrorResult() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    val body = request.bodyString()
+                    when {
+                        body.contains("\"method\":\"initialize\"") -> jsonResponse(request = request, body = initializedBody())
+                        body.contains("\"method\":\"notifications/initialized\"") -> emptyResponse(request)
+                        else ->
+                            jsonResponse(
+                                request = request,
+                                body =
+                                    """
+                                    {
+                                      "jsonrpc": "2.0",
+                                      "id": 2,
+                                      "result": {
+                                        "content": [
+                                          {"type": "text", "text": "Repository not found."}
+                                        ],
+                                        "isError": true
+                                      }
+                                    }
+                                    """.trimIndent(),
+                            )
+                    }
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.callTool(
+                    name = "github_repository_summary",
+                    arguments =
+                        buildJsonObject {
+                            put("owner", "square")
+                            put("repo", "missing")
+                        },
+                )
+
+            assertTrue(result is McpToolCallResult.Success)
+            val call = (result as McpToolCallResult.Success).value
+            assertEquals("Repository not found.", call.contentText)
+            assertEquals(true, call.isError)
+        }
+
+    @Test
+    fun callToolMapsJsonRpcError() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    val body = request.bodyString()
+                    when {
+                        body.contains("\"method\":\"initialize\"") -> jsonResponse(request = request, body = initializedBody())
+                        body.contains("\"method\":\"notifications/initialized\"") -> emptyResponse(request)
+                        else ->
+                            jsonResponse(
+                                request = request,
+                                body =
+                                    """
+                                    {
+                                      "jsonrpc": "2.0",
+                                      "id": 2,
+                                      "error": {"code": "-32602", "message": "Unknown tool"}
+                                    }
+                                    """.trimIndent(),
+                            )
+                    }
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.callTool(
+                    name = "github_repository_summary",
+                    arguments = buildJsonObject {},
+                )
+
+            assertTrue(result is McpToolCallResult.Failure)
+            assertEquals(
+                "MCP server returned JSON-RPC error -32602: Unknown tool.",
+                (result as McpToolCallResult.Failure).error.userMessage,
+            )
         }
 
     private fun client(

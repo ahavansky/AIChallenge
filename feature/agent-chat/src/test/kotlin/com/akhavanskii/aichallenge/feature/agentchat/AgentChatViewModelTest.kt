@@ -11,11 +11,15 @@ import com.akhavanskii.aichallenge.core.network.McpDiscoveryResult
 import com.akhavanskii.aichallenge.core.network.McpNetworkError
 import com.akhavanskii.aichallenge.core.network.McpServerInfo
 import com.akhavanskii.aichallenge.core.network.McpTool
+import com.akhavanskii.aichallenge.core.network.McpToolCall
+import com.akhavanskii.aichallenge.core.network.McpToolCallResult
 import com.akhavanskii.aichallenge.core.network.McpToolDiscovery
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -260,7 +264,7 @@ class AgentChatViewModelTest {
                     .last()
             assertFalse(message.isLoading)
             assertFalse(message.isError)
-            assertTrue(message.text.contains("Fetch MCP connected to fetch 1.0.0."))
+            assertTrue(message.text.contains("MCP connected to fetch 1.0.0."))
             assertTrue(message.text.contains("`fetch`"))
             assertTrue(message.text.contains("Required args: `url`"))
             assertEquals(1, fakeMcpClient.callCount)
@@ -328,6 +332,130 @@ class AgentChatViewModelTest {
                     .text
                     .contains("Connected, but no tools returned."),
             )
+        }
+
+    @Test
+    fun callGitHubRepositoryToolCallsMcpAndUsesResultInLlmPrompt() =
+        runTest {
+            val fakeAgent = FakeLlmAgent(result = GeminiResult.Success("OkHttp is a Kotlin HTTP client."))
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResult =
+                        McpToolCallResult.Success(
+                            McpToolCall(
+                                name = "github_repository_summary",
+                                contentText =
+                                    """
+                                    GitHub repository summary
+                                    Full name: square/okhttp
+                                    Stars: 47000
+                                    Language: Kotlin
+                                    """.trimIndent(),
+                                isError = false,
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent = fakeAgent, mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("square/okhttp"))
+            viewModel.onAction(AgentChatAction.CallGitHubRepositoryTool)
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.toolCallCount)
+            assertEquals("github_repository_summary", fakeMcpClient.lastToolName)
+            val arguments = fakeMcpClient.lastArguments
+            assertEquals(
+                "square",
+                arguments
+                    ?.get("owner")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
+            assertEquals(
+                "okhttp",
+                arguments
+                    ?.get("repo")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
+            assertEquals(1, fakeAgent.calls.size)
+            assertTrue(
+                fakeAgent
+                    .calls
+                    .single()
+                    .messages
+                    .any { it.text.contains("Full name: square/okhttp") },
+            )
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertFalse(message.isError)
+            assertTrue(message.text.contains("MCP tool `github_repository_summary` returned"))
+            assertTrue(message.text.contains("Agent answer"))
+            assertTrue(message.text.contains("OkHttp is a Kotlin HTTP client."))
+        }
+
+    @Test
+    fun callGitHubRepositoryToolShowsToolErrorWithoutCallingLlm() =
+        runTest {
+            val fakeAgent = FakeLlmAgent()
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResult =
+                        McpToolCallResult.Success(
+                            McpToolCall(
+                                name = "github_repository_summary",
+                                contentText = "Repository not found: square/missing.",
+                                isError = true,
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(fakeAgent = fakeAgent, mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("square/missing"))
+            viewModel.onAction(AgentChatAction.CallGitHubRepositoryTool)
+            runCurrent()
+
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertTrue(message.isError)
+            assertTrue(message.text.contains("Repository not found"))
+            assertEquals(1, fakeMcpClient.toolCallCount)
+            assertEquals(0, fakeAgent.calls.size)
+        }
+
+    @Test
+    fun callGitHubRepositoryToolIgnoresSecondRequestWhileLoading() =
+        runTest {
+            val pendingResult = CompletableDeferred<McpToolCallResult>()
+            val fakeMcpClient = FakeMcpClient(toolResults = ArrayDeque(listOf(pendingResult)))
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("square/okhttp"))
+            viewModel.onAction(AgentChatAction.CallGitHubRepositoryTool)
+            runCurrent()
+            viewModel.onAction(AgentChatAction.InputChanged("JetBrains/kotlin"))
+            viewModel.onAction(AgentChatAction.CallGitHubRepositoryTool)
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.toolCallCount)
+            assertTrue(viewModel.uiState.value.isLoading)
+
+            pendingResult.complete(McpToolCallResult.Failure(McpNetworkError.Network("stopped")))
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.toolCallCount)
+            assertFalse(viewModel.uiState.value.isLoading)
         }
 
     @Test
@@ -935,8 +1063,27 @@ class AgentChatViewModelTest {
             ),
         private val results: ArrayDeque<CompletableDeferred<McpDiscoveryResult<McpToolDiscovery>>> =
             ArrayDeque(listOf(CompletableDeferred(result))),
+        toolResult: McpToolCallResult =
+            McpToolCallResult.Success(
+                McpToolCall(
+                    name = "github_repository_summary",
+                    contentText = "GitHub repository summary",
+                    isError = false,
+                ),
+            ),
+        private val toolResults: ArrayDeque<CompletableDeferred<McpToolCallResult>> =
+            ArrayDeque(listOf(CompletableDeferred(toolResult))),
     ) : McpClient {
         var callCount = 0
+            private set
+
+        var toolCallCount = 0
+            private set
+
+        var lastToolName: String? = null
+            private set
+
+        var lastArguments: JsonObject? = null
             private set
 
         override suspend fun listTools(): McpDiscoveryResult<McpToolDiscovery> {
@@ -946,6 +1093,22 @@ class AgentChatViewModelTest {
                     results.removeFirst()
                 } else {
                     results.first()
+                }
+            return result.await()
+        }
+
+        override suspend fun callTool(
+            name: String,
+            arguments: JsonObject,
+        ): McpToolCallResult {
+            toolCallCount += 1
+            lastToolName = name
+            lastArguments = arguments
+            val result =
+                if (toolResults.size > 1) {
+                    toolResults.removeFirst()
+                } else {
+                    toolResults.first()
                 }
             return result.await()
         }

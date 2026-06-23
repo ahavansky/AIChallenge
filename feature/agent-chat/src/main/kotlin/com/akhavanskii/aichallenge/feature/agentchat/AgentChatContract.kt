@@ -70,6 +70,9 @@ data class AgentChatUiState(
     val canListFetchTools: Boolean
         get() = !isLoading
 
+    val canUseGitHubMcp: Boolean
+        get() = input.isNotBlank() && !isLoading
+
     val canClearTaskContext: Boolean
         get() = memory.taskContext.itemCount > 0 && !isLoading
 
@@ -154,7 +157,7 @@ enum class AgentChatInvariantCheckStatus(
 ) {
     NOT_RUN("Not run"),
     PASSED("Passed"),
-    BLOCKED("Blocked before Gemini"),
+    BLOCKED("Blocked before agent"),
     REPAIRED("Repaired once"),
     FAILED("Failed after repair"),
 }
@@ -242,6 +245,8 @@ sealed interface AgentChatAction : UiEvent {
     data object ClearTaskContext : AgentChatAction
 
     data object ListFetchTools : AgentChatAction
+
+    data object CallGitHubRepositoryTool : AgentChatAction
 
     data object SaveLongTermMemory : AgentChatAction
 

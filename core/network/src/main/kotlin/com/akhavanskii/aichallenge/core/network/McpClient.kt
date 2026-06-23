@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -23,17 +24,23 @@ import javax.inject.Inject
 import javax.inject.Named
 
 const val MCP_FETCH_SERVER_URL_NAME = "McpFetchServerUrl"
+const val MCP_SERVER_URL_NAME = MCP_FETCH_SERVER_URL_NAME
 
 const val MCP_PROTOCOL_VERSION = "2025-06-18"
 
 interface McpClient {
     suspend fun listTools(): McpDiscoveryResult<McpToolDiscovery>
+
+    suspend fun callTool(
+        name: String,
+        arguments: JsonObject,
+    ): McpToolCallResult
 }
 
 class RestMcpClient
     @Inject
     constructor(
-        @param:Named(MCP_FETCH_SERVER_URL_NAME) private val serverUrl: String,
+        @param:Named(MCP_SERVER_URL_NAME) private val serverUrl: String,
         private val callFactory: Call.Factory,
         private val json: Json,
         @param:NetworkDispatcher private val dispatcher: CoroutineDispatcher,
@@ -49,12 +56,45 @@ class RestMcpClient
                     discoverTools(endpoint)
                 }.getOrElse { throwable ->
                     if (throwable is CancellationException) throw throwable
-                    Timber.tag(LOG_TAG).e(throwable, "Fetch MCP discovery failed before parsed result.")
+                    Timber.tag(LOG_TAG).e(throwable, "MCP discovery failed before parsed result.")
                     when (throwable) {
                         is IOException -> McpDiscoveryResult.Failure(McpNetworkError.Network(throwable.message))
                         is SerializationException -> McpDiscoveryResult.Failure(McpNetworkError.Serialization(throwable.message))
                         is IllegalArgumentException -> McpDiscoveryResult.Failure(McpNetworkError.InvalidEndpoint(throwable.message))
                         else -> McpDiscoveryResult.Failure(McpNetworkError.Network(throwable.message))
+                    }
+                }
+            }
+        }
+
+        override suspend fun callTool(
+            name: String,
+            arguments: JsonObject,
+        ): McpToolCallResult {
+            val endpoint = serverUrl.trim()
+            if (endpoint.isBlank()) {
+                return McpToolCallResult.Failure(McpNetworkError.MissingEndpoint)
+            }
+            val toolName = name.trim()
+            if (toolName.isBlank()) {
+                return McpToolCallResult.Failure(McpNetworkError.InvalidToolCall("Tool name is required."))
+            }
+
+            return withContext(dispatcher) {
+                runCatching {
+                    callRemoteTool(
+                        endpoint = endpoint,
+                        name = toolName,
+                        arguments = arguments,
+                    )
+                }.getOrElse { throwable ->
+                    if (throwable is CancellationException) throw throwable
+                    Timber.tag(LOG_TAG).e(throwable, "MCP tool call failed before parsed result.")
+                    when (throwable) {
+                        is IOException -> McpToolCallResult.Failure(McpNetworkError.Network(throwable.message))
+                        is SerializationException -> McpToolCallResult.Failure(McpNetworkError.Serialization(throwable.message))
+                        is IllegalArgumentException -> McpToolCallResult.Failure(McpNetworkError.InvalidEndpoint(throwable.message))
+                        else -> McpToolCallResult.Failure(McpNetworkError.Network(throwable.message))
                     }
                 }
             }
@@ -125,6 +165,66 @@ class RestMcpClient
                     serverInfo = serverInfo,
                     toolsCapabilityAdvertised = true,
                     tools = tools,
+                ),
+            )
+        }
+
+        private fun callRemoteTool(
+            endpoint: String,
+            name: String,
+            arguments: JsonObject,
+        ): McpToolCallResult {
+            val initialize =
+                postJsonRpc(
+                    endpoint = endpoint,
+                    payload = initializeRequest(id = INITIALIZE_REQUEST_ID),
+                    sessionId = null,
+                    responseRequired = true,
+                )
+            val initialized =
+                when (initialize) {
+                    is McpExchangeResult.Failure -> return McpToolCallResult.Failure(initialize.error)
+                    is McpExchangeResult.Success -> initialize
+                }
+            if (initialized.result == null) {
+                return McpToolCallResult.Failure(McpNetworkError.EmptyResponse)
+            }
+
+            val notification =
+                postJsonRpc(
+                    endpoint = endpoint,
+                    payload = initializedNotification(),
+                    sessionId = initialized.sessionId,
+                    responseRequired = false,
+                )
+            val notificationSessionId =
+                when (notification) {
+                    is McpExchangeResult.Failure -> return McpToolCallResult.Failure(notification.error)
+                    is McpExchangeResult.Success -> notification.sessionId ?: initialized.sessionId
+                }
+
+            val callResponse =
+                postJsonRpc(
+                    endpoint = endpoint,
+                    payload = toolsCallRequest(id = nextRequestId(), name = name, arguments = arguments),
+                    sessionId = notificationSessionId,
+                    responseRequired = true,
+                )
+            val callResult =
+                when (callResponse) {
+                    is McpExchangeResult.Failure -> return McpToolCallResult.Failure(callResponse.error)
+                    is McpExchangeResult.Success ->
+                        callResponse.result ?: return McpToolCallResult.Failure(McpNetworkError.EmptyResponse)
+                }
+            val contentText = callResult.contentText()
+            if (contentText.isBlank()) {
+                return McpToolCallResult.Failure(McpNetworkError.EmptyResponse)
+            }
+            return McpToolCallResult.Success(
+                McpToolCall(
+                    name = name,
+                    contentText = contentText,
+                    isError = callResult["isError"]?.jsonPrimitive?.booleanOrNull == true,
                 ),
             )
         }
@@ -228,6 +328,21 @@ class RestMcpClient
                 }
             }
 
+        private fun toolsCallRequest(
+            id: Long,
+            name: String,
+            arguments: JsonObject,
+        ): JsonObject =
+            buildJsonObject {
+                put("jsonrpc", JSON_RPC_VERSION)
+                put("id", id)
+                put("method", "tools/call")
+                putJsonObject("params") {
+                    put("name", name)
+                    put("arguments", arguments)
+                }
+            }
+
         private fun nextRequestId(): Long = requestId++
 
         private fun JsonObject.serverInfoOrNull(): McpServerInfo? {
@@ -259,6 +374,16 @@ class RestMcpClient
                         requiredInputNames = inputSchema.requiredInputNames(),
                     )
                 }.orEmpty()
+
+        private fun JsonObject.contentText(): String =
+            runCatching { this["content"]?.jsonArray }
+                .getOrNull()
+                ?.mapNotNull { element ->
+                    val content = runCatching { element.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    if (content.stringOrNull("type") != "text") return@mapNotNull null
+                    content.stringOrNull("text")?.takeIf { it.isNotBlank() }
+                }?.joinToString(separator = "\n")
+                .orEmpty()
 
         private fun JsonObject?.requiredInputNames(): List<String> =
             runCatching {
@@ -348,25 +473,47 @@ data class McpTool(
     val requiredInputNames: List<String>,
 )
 
+sealed interface McpToolCallResult {
+    data class Success(
+        val value: McpToolCall,
+    ) : McpToolCallResult
+
+    data class Failure(
+        val error: McpNetworkError,
+    ) : McpToolCallResult
+}
+
+data class McpToolCall(
+    val name: String,
+    val contentText: String,
+    val isError: Boolean,
+)
+
 sealed interface McpNetworkError {
     val userMessage: String
 
     data object MissingEndpoint : McpNetworkError {
         override val userMessage: String =
-            "Fetch MCP server URL is missing. Add MCP_FETCH_SERVER_URL to local.properties or your environment."
+            "MCP server URL is missing. Add MCP_SERVER_URL to local.properties or your environment."
     }
 
     data class InvalidEndpoint(
         val cause: String?,
     ) : McpNetworkError {
-        override val userMessage: String = "Fetch MCP server URL is invalid."
+        override val userMessage: String = "MCP server URL is invalid."
+    }
+
+    data class InvalidToolCall(
+        val cause: String?,
+    ) : McpNetworkError {
+        override val userMessage: String = cause ?: "MCP tool call is invalid."
     }
 
     data class Http(
         val statusCode: Int,
         val body: String?,
     ) : McpNetworkError {
-        override val userMessage: String = "Fetch MCP discovery failed with HTTP $statusCode."
+        override val userMessage: String = "MCP request failed with HTTP $statusCode."
     }
 
     data class JsonRpc(
@@ -375,7 +522,7 @@ sealed interface McpNetworkError {
     ) : McpNetworkError {
         override val userMessage: String =
             buildString {
-                append("Fetch MCP server returned JSON-RPC error")
+                append("MCP server returned JSON-RPC error")
                 code?.let { append(" $it") }
                 message?.let { append(": $it") }
                 append(".")
@@ -385,16 +532,16 @@ sealed interface McpNetworkError {
     data class Network(
         val cause: String?,
     ) : McpNetworkError {
-        override val userMessage: String = "Network error while contacting Fetch MCP server."
+        override val userMessage: String = "Network error while contacting MCP server."
     }
 
     data class Serialization(
         val cause: String?,
     ) : McpNetworkError {
-        override val userMessage: String = "Fetch MCP response could not be parsed."
+        override val userMessage: String = "MCP response could not be parsed."
     }
 
     data object EmptyResponse : McpNetworkError {
-        override val userMessage: String = "Fetch MCP server returned an empty response."
+        override val userMessage: String = "MCP server returned an empty response."
     }
 }

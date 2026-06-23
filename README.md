@@ -11,7 +11,7 @@ Modules:
 - `:app` - Android application entry point, `MainActivity`, Navigation 3 host, application-level Hilt bindings, and API-key wiring.
 - `:core:designsystem` - Material 3 theme, dynamic color, typography, and reusable Compose controls used by features.
 - `:core:mvvm` - Minimal marker contracts for state, events, and effects. No base classes are included because there is no shared behavior to enforce.
-- `:core:network` - OkHttp Gemini, DeepSeek, HuggingFace, and MCP discovery clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
+- `:core:network` - OkHttp Gemini, DeepSeek, HuggingFace, and MCP discovery/tool-call clients, kotlinx.serialization DTOs, `generationConfig` serialization, timeout setup, retry logic, and network/error mapping.
 - `:core:utils` - Shared prompt normalization used by the feature and covered with unit tests.
 - `:feature:common` - Shared feature-level UI models such as the response pane state and Gemini model options.
 - `:feature:agent-chat` - Dedicated LLM agent chat screen, accumulated chat state, ViewModel, Compose UI, and tests.
@@ -20,6 +20,7 @@ Modules:
 - `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
+- `:mcp:github-server` - Standalone JVM MCP HTTP server that exposes a read-only GitHub repository summary tool backed by the live GitHub REST API.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 
@@ -57,7 +58,21 @@ Agent Chat reads a DeepSeek API key from `DEEPSEEK_API_KEY` when a DeepSeek mode
 
 DeepSeek Agent Chat models use DeepSeek's OpenAI-compatible chat completions endpoint: `https://api.deepseek.com/chat/completions`. They are not sent through Gemini `generateContent`.
 
-Agent Chat can list tools from a remote Streamable HTTP Fetch MCP server. Set `MCP_FETCH_SERVER_URL` through `local.properties`, a Gradle property, or an environment variable. The app only performs MCP `initialize`, `notifications/initialized`, and `tools/list`; it does not call Fetch tools or start a local stdio server.
+Agent Chat can call a standalone GitHub MCP server. Start it from the project root:
+
+```bash
+rtk ./gradlew :mcp:github-server:run
+```
+
+`MCP_SERVER_URL` can be set through `local.properties`, a Gradle property, or an environment variable. If it is omitted, the Android app defaults to the emulator host-loopback URL:
+
+```properties
+MCP_SERVER_URL=http://10.0.2.2:8765/mcp
+```
+
+Do not use `http://localhost:8765/mcp` in the Android emulator config: inside the emulator, `localhost` points to the emulator itself, while `10.0.2.2` points to the host machine running the MCP server. For local emulator demos, the app normalizes `localhost` and `127.0.0.1` MCP URLs to `10.0.2.2` at runtime. The app permits cleartext HTTP only for local MCP development hosts (`10.0.2.2`, `10.0.3.2`, `127.0.0.1`, and `localhost`).
+
+The MCP server exposes `github_repository_summary`, validates `owner` and `repo`, and calls the live GitHub REST API route `GET https://api.github.com/repos/{owner}/{repo}`. The optional `GITHUB_TOKEN` environment variable is read only by the server process to raise GitHub rate limits; the Android app does not receive this token. `MCP_FETCH_SERVER_URL` remains accepted as a legacy fallback.
 
 ## Gemini Parameter Comparison
 
@@ -96,7 +111,7 @@ Agent Chat has a compact header model selector. The selected model is saved in `
 
 `Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Each stage begins with five parallel specialist branches for intent, constraints, context, solution strategy, and review; an orchestrator step then synthesizes the specialist artifacts into the stage artifact. The app gates transitions in code: execution cannot start until the user approves the task spec, finalization cannot start until validation reports `PASS` and the user accepts it, and invalid jumps are rejected with local errors. Plan revision returns to planning, execution revision returns to execution, and validation outcomes are stored explicitly as `PASS`, `NEEDS_REVISION`, `BLOCKED`, or `UNKNOWN`. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed specialist branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes invariants before formal task state and editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. Hard invariant conflicts in user requests are refused locally before Gemini is called. Model outputs are checked before they are stored as typed artifacts; a hard invariant violation gets one repair request, and a repeated violation fails the current task step. The screen shows the current stage, step, branch status, waiting reason, validation outcome, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
 
-`List MCP tools` is a local Agent Chat action. It connects to `MCP_FETCH_SERVER_URL`, discovers available MCP tools, and writes the returned tool names, descriptions, and required arguments into chat history without calling Gemini.
+`Use GitHub MCP` is a local Agent Chat action. Enter a repository as `owner/repo`, for example `square/okhttp`; the app calls MCP `tools/call` for `github_repository_summary`, receives live GitHub metadata, then sends that tool result to the selected LLM as untrusted external data. The final chat message shows both the MCP tool result and the agent answer derived from it. The existing MCP client still supports `tools/list` discovery for diagnostics.
 
 ## Context Agent
 

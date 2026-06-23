@@ -3,11 +3,12 @@ package com.akhavanskii.aichallenge
 import com.akhavanskii.aichallenge.core.network.DEEPSEEK_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.GEMINI_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.HUGGINGFACE_API_KEY_NAME
-import com.akhavanskii.aichallenge.core.network.MCP_FETCH_SERVER_URL_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_SERVER_URL_NAME
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import java.net.URI
 import javax.inject.Named
 
 @Module
@@ -26,6 +27,31 @@ object AppConfigModule {
     fun provideDeepSeekApiKey(): String = BuildConfig.DEEPSEEK_API_KEY
 
     @Provides
-    @Named(MCP_FETCH_SERVER_URL_NAME)
-    fun provideMcpFetchServerUrl(): String = BuildConfig.MCP_FETCH_SERVER_URL
+    @Named(MCP_SERVER_URL_NAME)
+    fun provideMcpServerUrl(): String = BuildConfig.MCP_SERVER_URL.toAndroidMcpServerUrl()
 }
+
+internal fun String.toAndroidMcpServerUrl(): String {
+    val trimmed = trim()
+    if (trimmed.isBlank()) return DEFAULT_ANDROID_MCP_SERVER_URL
+
+    val endpoint = if ("://" in trimmed) trimmed else "http://$trimmed"
+    return runCatching {
+        val uri = URI(endpoint)
+        val host = uri.host?.lowercase() ?: return endpoint
+        if (host != "localhost" && host != "127.0.0.1") return endpoint
+
+        URI(
+            uri.scheme ?: "http",
+            uri.userInfo,
+            ANDROID_EMULATOR_HOST_LOOPBACK,
+            uri.port,
+            uri.path,
+            uri.query,
+            uri.fragment,
+        ).toASCIIString()
+    }.getOrElse { endpoint }
+}
+
+private const val ANDROID_EMULATOR_HOST_LOOPBACK = "10.0.2.2"
+internal const val DEFAULT_ANDROID_MCP_SERVER_URL = "http://10.0.2.2:8765/mcp"

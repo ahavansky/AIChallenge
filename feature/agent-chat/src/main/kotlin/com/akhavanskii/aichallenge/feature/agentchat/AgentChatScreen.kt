@@ -208,11 +208,11 @@ fun AgentChatScreen(
                     Text("Run task")
                 }
                 TextButton(
-                    onClick = { onAction(AgentChatAction.ListFetchTools) },
-                    enabled = state.canListFetchTools,
-                    modifier = Modifier.testTag(AgentChatTags.MCP_TOOLS_BUTTON),
+                    onClick = { onAction(AgentChatAction.CallGitHubRepositoryTool) },
+                    enabled = state.canUseGitHubMcp,
+                    modifier = Modifier.testTag(AgentChatTags.GITHUB_MCP_BUTTON),
                 ) {
-                    Text("List MCP tools")
+                    Text("Use GitHub MCP")
                 }
                 TextButton(
                     onClick = { onAction(AgentChatAction.ClearChat) },
@@ -255,6 +255,7 @@ private fun TaskStatePanel(
     onResetTask: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isExpanded by remember(taskState.taskId) { mutableStateOf(false) }
     var artifactsExpanded by remember(taskState.taskId, taskState.artifacts.size) { mutableStateOf(false) }
 
     Surface(
@@ -266,183 +267,221 @@ private fun TaskStatePanel(
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Text(
-                text = "Task state",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            FlowRow(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                AgentTaskStage.entries.forEach { stage ->
-                    val isReached = taskState.hasActiveTask && stage.ordinal <= taskState.stage.ordinal
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color =
-                            if (isReached) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surface
-                            },
-                    ) {
-                        Text(
-                            text = stage.title,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color =
-                                if (isReached) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                        )
-                    }
-                }
-            }
-            Text(
-                text = taskState.formatDebugDetails(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (taskState.branches.isNotEmpty()) {
-                FlowRow(
+                Text(
+                    text = "Task state",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = " · ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = taskState.formatCompactTaskDetails(),
                     modifier =
                         Modifier
-                            .fillMaxWidth()
-                            .testTag(AgentChatTags.TASK_BRANCHES),
+                            .weight(1f)
+                            .padding(end = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (isExpanded) "Hide" else "Details",
+                    modifier =
+                        Modifier
+                            .clickable { isExpanded = !isExpanded }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag(AgentChatTags.TASK_STATE_TOGGLE),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (isExpanded) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    taskState.branches.forEach { branch ->
+                    AgentTaskStage.entries.forEach { stage ->
+                        val isReached = taskState.hasActiveTask && stage.ordinal <= taskState.stage.ordinal
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = branch.status.containerColor(),
+                            color =
+                                if (isReached) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                },
                         ) {
                             Text(
-                                text = "${branch.id.title}: ${branch.status.title}",
+                                text = stage.title,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = branch.status.contentColor(),
+                                color =
+                                    if (isReached) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
                             )
                         }
                     }
                 }
-            }
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                TextButton(
-                    onClick = onPauseTask,
-                    enabled = canPauseTask,
-                    modifier = Modifier.testTag(AgentChatTags.PAUSE_TASK_BUTTON),
-                ) {
-                    Text("Pause task")
-                }
-                TextButton(
-                    onClick = onResumeTask,
-                    enabled = canResumeTask,
-                    modifier = Modifier.testTag(AgentChatTags.RESUME_TASK_BUTTON),
-                ) {
-                    Text("Continue task")
-                }
-                TextButton(
-                    onClick = onRetryTask,
-                    enabled = canRetryTask,
-                    modifier = Modifier.testTag(AgentChatTags.RETRY_TASK_BUTTON),
-                ) {
-                    Text("Retry step")
-                }
-                TextButton(
-                    onClick = onApprovePlan,
-                    enabled = canApprovePlan,
-                    modifier = Modifier.testTag(AgentChatTags.APPROVE_PLAN_BUTTON),
-                ) {
-                    Text("Approve plan")
-                }
-                TextButton(
-                    onClick = onRequestPlanRevision,
-                    enabled = canRequestPlanRevision,
-                    modifier = Modifier.testTag(AgentChatTags.REQUEST_PLAN_REVISION_BUTTON),
-                ) {
-                    Text("Revise plan")
-                }
-                TextButton(
-                    onClick = onAcceptValidation,
-                    enabled = canAcceptValidation,
-                    modifier = Modifier.testTag(AgentChatTags.ACCEPT_VALIDATION_BUTTON),
-                ) {
-                    Text("Accept validation")
-                }
-                TextButton(
-                    onClick = onRequestExecutionRevision,
-                    enabled = canRequestExecutionRevision,
-                    modifier = Modifier.testTag(AgentChatTags.REQUEST_EXECUTION_REVISION_BUTTON),
-                ) {
-                    Text("Revise draft")
-                }
-                TextButton(
-                    onClick = onResetTask,
-                    enabled = canResetTask,
-                    modifier = Modifier.testTag(AgentChatTags.RESET_TASK_BUTTON),
-                ) {
-                    Text("Reset task")
-                }
-            }
-            if (taskState.artifacts.isNotEmpty()) {
-                TextButton(
-                    onClick = { artifactsExpanded = !artifactsExpanded },
-                    modifier = Modifier.testTag(AgentChatTags.TASK_ARTIFACTS_TOGGLE),
-                ) {
-                    Text(if (artifactsExpanded) "Hide artifacts" else "Show artifacts")
-                }
-            }
-            if (artifactsExpanded) {
-                val expandedArtifacts = remember(taskState.taskId) { mutableStateOf(setOf<Int>()) }
-                Column(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .testTag(AgentChatTags.TASK_ARTIFACTS),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    taskState.artifacts.forEachIndexed { index, artifact ->
-                        val isExpanded = index in expandedArtifacts.value
-                        Surface(
-                            onClick = {
-                                expandedArtifacts.value =
-                                    if (isExpanded) {
-                                        expandedArtifacts.value - index
-                                    } else {
-                                        expandedArtifacts.value + index
-                                    }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                Text(
+                    text = taskState.formatDebugDetails(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (taskState.branches.isNotEmpty()) {
+                    FlowRow(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .testTag(AgentChatTags.TASK_BRANCHES),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        taskState.branches.forEach { branch ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = branch.status.containerColor(),
                             ) {
                                 Text(
-                                    text = artifact.type.title,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    text = "${branch.id.title}: ${branch.status.title}",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = branch.status.contentColor(),
                                 )
-                                ChallengeMarkdownText(
-                                    text = artifact.text,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = if (isExpanded) Int.MAX_VALUE else COLLAPSED_ARTIFACT_LINES,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                            }
+                        }
+                    }
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    TextButton(
+                        onClick = onPauseTask,
+                        enabled = canPauseTask,
+                        modifier = Modifier.testTag(AgentChatTags.PAUSE_TASK_BUTTON),
+                    ) {
+                        Text("Pause task")
+                    }
+                    TextButton(
+                        onClick = onResumeTask,
+                        enabled = canResumeTask,
+                        modifier = Modifier.testTag(AgentChatTags.RESUME_TASK_BUTTON),
+                    ) {
+                        Text("Continue task")
+                    }
+                    TextButton(
+                        onClick = onRetryTask,
+                        enabled = canRetryTask,
+                        modifier = Modifier.testTag(AgentChatTags.RETRY_TASK_BUTTON),
+                    ) {
+                        Text("Retry step")
+                    }
+                    TextButton(
+                        onClick = onApprovePlan,
+                        enabled = canApprovePlan,
+                        modifier = Modifier.testTag(AgentChatTags.APPROVE_PLAN_BUTTON),
+                    ) {
+                        Text("Approve plan")
+                    }
+                    TextButton(
+                        onClick = onRequestPlanRevision,
+                        enabled = canRequestPlanRevision,
+                        modifier = Modifier.testTag(AgentChatTags.REQUEST_PLAN_REVISION_BUTTON),
+                    ) {
+                        Text("Revise plan")
+                    }
+                    TextButton(
+                        onClick = onAcceptValidation,
+                        enabled = canAcceptValidation,
+                        modifier = Modifier.testTag(AgentChatTags.ACCEPT_VALIDATION_BUTTON),
+                    ) {
+                        Text("Accept validation")
+                    }
+                    TextButton(
+                        onClick = onRequestExecutionRevision,
+                        enabled = canRequestExecutionRevision,
+                        modifier = Modifier.testTag(AgentChatTags.REQUEST_EXECUTION_REVISION_BUTTON),
+                    ) {
+                        Text("Revise draft")
+                    }
+                    TextButton(
+                        onClick = onResetTask,
+                        enabled = canResetTask,
+                        modifier = Modifier.testTag(AgentChatTags.RESET_TASK_BUTTON),
+                    ) {
+                        Text("Reset task")
+                    }
+                }
+                if (taskState.artifacts.isNotEmpty()) {
+                    TextButton(
+                        onClick = { artifactsExpanded = !artifactsExpanded },
+                        modifier = Modifier.testTag(AgentChatTags.TASK_ARTIFACTS_TOGGLE),
+                    ) {
+                        Text(if (artifactsExpanded) "Hide artifacts" else "Show artifacts")
+                    }
+                }
+                if (artifactsExpanded) {
+                    val expandedArtifacts = remember(taskState.taskId) { mutableStateOf(setOf<Int>()) }
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .testTag(AgentChatTags.TASK_ARTIFACTS),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        taskState.artifacts.forEachIndexed { index, artifact ->
+                            val isExpanded = index in expandedArtifacts.value
+                            Surface(
+                                onClick = {
+                                    expandedArtifacts.value =
+                                        if (isExpanded) {
+                                            expandedArtifacts.value - index
+                                        } else {
+                                            expandedArtifacts.value + index
+                                        }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        text = artifact.type.title,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    ChallengeMarkdownText(
+                                        text = artifact.text,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = if (isExpanded) Int.MAX_VALUE else COLLAPSED_ARTIFACT_LINES,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -1201,6 +1240,28 @@ private fun AgentChatMemorySnapshot.formatCompactMemoryDetails(
     }
 }
 
+private fun AgentTaskState.formatCompactTaskDetails(): String =
+    if (!hasActiveTask) {
+        "Idle · Ready to start"
+    } else {
+        buildString {
+            append("${status.title} · ${stage.title} · ${step.title}")
+            if (waitingReason != AgentTaskWaitingReason.NONE) {
+                append(" · Waiting: ${waitingReason.title}")
+            }
+            if (validationOutcome != AgentValidationOutcome.UNKNOWN) {
+                append(" · Validation: ${validationOutcome.title}")
+            }
+            if (branches.isNotEmpty()) {
+                val doneCount = branches.count { it.status == AgentTaskBranchStatus.DONE }
+                append(" · Branches: $doneCount/${branches.size}")
+            }
+            if (artifacts.isNotEmpty()) {
+                append(" · Artifacts: ${artifacts.size}")
+            }
+        }
+    }
+
 @Composable
 private fun AgentTaskBranchStatus.containerColor() =
     when (this) {
@@ -1419,7 +1480,7 @@ private fun ConversationHistory(
     ) {
         if (messages.isEmpty()) {
             ChatMessagePanel(
-                title = "Gemini",
+                title = "Agent",
                 body = "No messages yet.",
             )
         } else {
@@ -1428,8 +1489,8 @@ private fun ConversationHistory(
                     title =
                         when {
                             message.role == AgentChatRole.USER -> "You"
-                            message.isError -> "Gemini error"
-                            else -> "Gemini"
+                            message.isError -> "Agent error"
+                            else -> "Agent"
                         },
                     body = message.text,
                     isError = message.isError,
@@ -1506,10 +1567,11 @@ object AgentChatTags {
     const val MODEL_MENU_BUTTON = "agent_chat_model_menu_button"
     const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
-    const val MCP_TOOLS_BUTTON = "agent_chat_mcp_tools_button"
+    const val GITHUB_MCP_BUTTON = "agent_chat_github_mcp_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
     const val TASK_STATE = "agent_chat_task_state"
+    const val TASK_STATE_TOGGLE = "agent_chat_task_state_toggle"
     const val PAUSE_TASK_BUTTON = "agent_chat_pause_task_button"
     const val RESUME_TASK_BUTTON = "agent_chat_resume_task_button"
     const val RETRY_TASK_BUTTON = "agent_chat_retry_task_button"
