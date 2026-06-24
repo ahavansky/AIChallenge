@@ -5,6 +5,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
@@ -414,6 +416,70 @@ class McpClientTest {
             val call = (result as McpToolCallResult.Success).value
             assertEquals("Repository not found.", call.contentText)
             assertEquals(true, call.isError)
+        }
+
+    @Test
+    fun callToolParsesStructuredContentWhenPresent() =
+        runTest {
+            val factory =
+                FakeCallFactory { request ->
+                    val body = request.bodyString()
+                    when {
+                        body.contains("\"method\":\"initialize\"") -> jsonResponse(request = request, body = initializedBody())
+                        body.contains("\"method\":\"notifications/initialized\"") -> emptyResponse(request)
+                        else ->
+                            jsonResponse(
+                                request = request,
+                                body =
+                                    """
+                                    {
+                                      "jsonrpc": "2.0",
+                                      "id": 2,
+                                      "result": {
+                                        "content": [
+                                          {"type": "text", "text": "Live briefing summary"}
+                                        ],
+                                        "structuredContent": {
+                                          "status": "fresh",
+                                          "brief": {"headline": "Ready"}
+                                        }
+                                      }
+                                    }
+                                    """.trimIndent(),
+                            )
+                    }
+                }
+            val client = client(factory = factory)
+
+            val result =
+                client.callTool(
+                    name = "live_briefing",
+                    arguments =
+                        buildJsonObject {
+                            put("action", "summary")
+                        },
+                )
+
+            assertTrue(result is McpToolCallResult.Success)
+            val call = (result as McpToolCallResult.Success).value
+            assertEquals(
+                "fresh",
+                call
+                    .structuredContent
+                    ?.get("status")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
+            assertEquals(
+                "Ready",
+                call
+                    .structuredContent
+                    ?.get("brief")
+                    ?.jsonObject
+                    ?.get("headline")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
         }
 
     @Test

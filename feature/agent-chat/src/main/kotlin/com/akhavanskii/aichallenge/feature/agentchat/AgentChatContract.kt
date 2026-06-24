@@ -16,6 +16,7 @@ data class AgentChatUiState(
     val invariantsInput: String = AgentChatInvariantSet().markdown,
     val lastInvariantCheck: AgentChatInvariantCheckSnapshot = AgentChatInvariantCheckSnapshot(),
     val compareResults: List<AgentChatProfileCompareResult> = emptyList(),
+    val liveBriefing: AgentChatLiveBriefingUiState = AgentChatLiveBriefingUiState(),
     val isLongTermMemoryDirty: Boolean = false,
     val isInvariantsDirty: Boolean = false,
 ) : UiState {
@@ -23,6 +24,8 @@ data class AgentChatUiState(
         get() =
             messages.any { it.isLoading } ||
                 compareResults.any { it.isLoading } ||
+                liveBriefing.isLoading ||
+                liveBriefing.isWatching ||
                 memory.taskState.status == AgentTaskStatus.RUNNING
 
     val canRunTask: Boolean
@@ -73,6 +76,15 @@ data class AgentChatUiState(
     val canUseGitHubMcp: Boolean
         get() = input.isNotBlank() && !isLoading
 
+    val canWatchLiveBriefingMcp: Boolean
+        get() = !isLoading
+
+    val canRefreshLiveBriefing: Boolean
+        get() = liveBriefing.isVisible && !isLoading
+
+    val canAddLiveBriefingReminder: Boolean
+        get() = liveBriefing.isVisible && !isLoading
+
     val canClearTaskContext: Boolean
         get() = memory.taskContext.itemCount > 0 && !isLoading
 
@@ -81,6 +93,35 @@ data class AgentChatUiState(
             profiles.firstOrNull { it.id == activeProfileId }
                 ?: AgentChatProfileCatalog.defaults.first { it.id == SENIOR_KOTLIN_PROFILE_ID }
 }
+
+data class AgentChatLiveBriefingUiState(
+    val isVisible: Boolean = false,
+    val isLoading: Boolean = false,
+    val isWatching: Boolean = false,
+    val status: String = "",
+    val city: String = "",
+    val weather: String = "",
+    val headline: String = "",
+    val bullets: List<String> = emptyList(),
+    val nextAction: String = "",
+    val newsItems: List<AgentChatLiveBriefingNewsItem> = emptyList(),
+    val dueReminders: List<AgentChatLiveBriefingReminder> = emptyList(),
+    val upcomingReminderCount: Int = 0,
+    val errors: List<String> = emptyList(),
+    val updatedAt: String = "",
+    val statusMessage: String = "",
+)
+
+data class AgentChatLiveBriefingNewsItem(
+    val title: String,
+    val source: String,
+)
+
+data class AgentChatLiveBriefingReminder(
+    val id: String,
+    val title: String,
+    val nextDueAt: String,
+)
 
 enum class AgentChatModelOption(
     val modelName: String,
@@ -247,6 +288,12 @@ sealed interface AgentChatAction : UiEvent {
     data object ListFetchTools : AgentChatAction
 
     data object CallGitHubRepositoryTool : AgentChatAction
+
+    data object WatchLiveBriefingMcp : AgentChatAction
+
+    data object RefreshLiveBriefingMcp : AgentChatAction
+
+    data object AddLiveBriefingDemoReminder : AgentChatAction
 
     data object SaveLongTermMemory : AgentChatAction
 

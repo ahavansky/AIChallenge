@@ -19,7 +19,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -456,6 +461,66 @@ class AgentChatViewModelTest {
 
             assertEquals(1, fakeMcpClient.toolCallCount)
             assertFalse(viewModel.uiState.value.isLoading)
+        }
+
+    @Test
+    fun watchLiveBriefingCallsMcpAndUpdatesCard() =
+        runTest {
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResult =
+                        McpToolCallResult.Success(
+                            liveBriefingToolCall(),
+                        ),
+                )
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.WatchLiveBriefingMcp)
+            runCurrent()
+
+            assertEquals(1, fakeMcpClient.toolCallCount)
+            assertEquals("live_briefing", fakeMcpClient.lastToolName)
+            assertEquals(
+                "demo_setup",
+                fakeMcpClient
+                    .lastArguments
+                    ?.get("action")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
+            val briefing = viewModel.uiState.value.liveBriefing
+            assertTrue(briefing.isVisible)
+            assertTrue(briefing.isWatching)
+            assertEquals("fresh", briefing.status)
+            assertTrue(briefing.weather.contains("Test City"))
+            assertEquals("Live briefing ready", briefing.headline)
+            assertEquals("Important headline", briefing.newsItems.single().title)
+
+            viewModel.onAction(AgentChatAction.Stop)
+            runCurrent()
+
+            assertFalse(viewModel.uiState.value.liveBriefing.isWatching)
+            assertFalse(viewModel.uiState.value.isLoading)
+        }
+
+    @Test
+    fun watchLiveBriefingShowsMcpFailureOnCard() =
+        runTest {
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResult = McpToolCallResult.Failure(McpNetworkError.Network("down")),
+                )
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.WatchLiveBriefingMcp)
+            runCurrent()
+
+            val briefing = viewModel.uiState.value.liveBriefing
+            assertTrue(briefing.isVisible)
+            assertFalse(briefing.isWatching)
+            assertTrue(briefing.errors.single().contains("Network error"))
         }
 
     @Test
@@ -1113,6 +1178,55 @@ class AgentChatViewModelTest {
             return result.await()
         }
     }
+
+    private fun liveBriefingToolCall(): McpToolCall =
+        McpToolCall(
+            name = "live_briefing",
+            contentText = "Live briefing summary",
+            isError = false,
+            structuredContent =
+                buildJsonObject {
+                    put("status", "fresh")
+                    put("generatedAt", "2026-06-24T10:00:00Z")
+                    put("city", "Test City")
+                    putJsonObject("weather") {
+                        put("city", "Test City")
+                        put("temperatureCelsius", 21.0)
+                        put("apparentTemperatureCelsius", 20.0)
+                        put("precipitationProbabilityPercent", 15)
+                        put("windSpeedKmh", 8.0)
+                    }
+                    putJsonArray("newsItems") {
+                        add(
+                            buildJsonObject {
+                                put("title", "Important headline")
+                                put("source", "bbc_world")
+                            },
+                        )
+                    }
+                    putJsonObject("reminders") {
+                        putJsonArray("due") {}
+                        putJsonArray("upcoming") {
+                            add(
+                                buildJsonObject {
+                                    put("id", "reminder-1")
+                                    put("title", "Check demo")
+                                    put("nextDueAt", "2026-06-24T10:00:30Z")
+                                },
+                            )
+                        }
+                        putJsonArray("recurring") {}
+                    }
+                    putJsonObject("brief") {
+                        put("headline", "Live briefing ready")
+                        putJsonArray("bullets") {
+                            add(JsonPrimitive("Test City: 21 C"))
+                        }
+                        put("nextAction", "Review headlines.")
+                    }
+                    putJsonArray("errors") {}
+                },
+        )
 
     private data class AgentCall(
         val messages: List<AgentMessage>,

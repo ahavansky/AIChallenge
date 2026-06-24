@@ -21,6 +21,7 @@ Modules:
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
 - `:mcp:github-server` - Standalone JVM MCP HTTP server that exposes a read-only GitHub repository summary tool backed by the live GitHub REST API.
+- `:mcp:live-briefing-server` - Standalone JVM MCP HTTP server that periodically refreshes a live user briefing from Open-Meteo weather, allowlisted RSS feeds, and local reminders persisted in JSON.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 
@@ -73,6 +74,24 @@ MCP_SERVER_URL=http://10.0.2.2:8765/mcp
 Do not use `http://localhost:8765/mcp` in the Android emulator config: inside the emulator, `localhost` points to the emulator itself, while `10.0.2.2` points to the host machine running the MCP server. For local emulator demos, the app normalizes `localhost` and `127.0.0.1` MCP URLs to `10.0.2.2` at runtime. The app permits cleartext HTTP only for local MCP development hosts (`10.0.2.2`, `10.0.3.2`, `127.0.0.1`, and `localhost`).
 
 The MCP server exposes `github_repository_summary`, validates `owner` and `repo`, and calls the live GitHub REST API route `GET https://api.github.com/repos/{owner}/{repo}`. The optional `GITHUB_TOKEN` environment variable is read only by the server process to raise GitHub rate limits; the Android app does not receive this token. `MCP_FETCH_SERVER_URL` remains accepted as a legacy fallback.
+
+For a more visual MCP demo, Agent Chat can also call the standalone Live Briefing MCP server. Start it instead of the GitHub server when recording the briefing demo:
+
+```bash
+rtk ./gradlew :mcp:live-briefing-server:run
+```
+
+The server exposes a single `live_briefing` tool with actions for `demo_setup`, `summary`, `refresh_now`, reminders, timeline, configuration, and reset. It keeps state in `build/live-briefing/state.json` by default and can be configured with:
+
+```properties
+MCP_LIVE_BRIEFING_STORE_PATH=/absolute/path/state.json
+MCP_LIVE_BRIEFING_PORT=8765
+MCP_LIVE_BRIEFING_REFRESH_SECONDS=600
+MCP_LIVE_BRIEFING_REMINDER_SECONDS=30
+MCP_LIVE_BRIEFING_DEMO_CITY=San Francisco
+```
+
+The briefing uses Open-Meteo geocoding and forecast APIs plus built-in HTTPS RSS feeds (`bbc_world`, `hacker_news`, `nasa_breaking`). Tool results include text and optional `structuredContent`, so the Android screen can render weather, headlines, reminder state, stale/partial status, and the next action without parsing prose. External RSS text is treated as untrusted data. The JVM process must stay running for scheduled refreshes and reminder checks; for a background demo run, use the Gradle-installed distribution script after `rtk ./gradlew :mcp:live-briefing-server:installDist`.
 
 ## Gemini Parameter Comparison
 

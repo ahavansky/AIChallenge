@@ -167,6 +167,13 @@ fun AgentChatScreen(
                 results = state.compareResults,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            LiveBriefingPanel(
+                briefing = state.liveBriefing,
+                onRefresh = { onAction(AgentChatAction.RefreshLiveBriefingMcp) },
+                onAddReminder = { onAction(AgentChatAction.AddLiveBriefingDemoReminder) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         if (!shouldHideComposer) {
@@ -206,6 +213,13 @@ fun AgentChatScreen(
                     modifier = Modifier.testTag(AgentChatTags.RUN_TASK_BUTTON),
                 ) {
                     Text("Run task")
+                }
+                TextButton(
+                    onClick = { onAction(AgentChatAction.WatchLiveBriefingMcp) },
+                    enabled = state.canWatchLiveBriefingMcp,
+                    modifier = Modifier.testTag(AgentChatTags.LIVE_BRIEFING_WATCH_BUTTON),
+                ) {
+                    Text("Watch Live Briefing MCP")
                 }
                 TextButton(
                     onClick = { onAction(AgentChatAction.CallGitHubRepositoryTool) },
@@ -1466,6 +1480,159 @@ private fun ProfileCompareResults(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LiveBriefingPanel(
+    briefing: AgentChatLiveBriefingUiState,
+    onRefresh: () -> Unit,
+    onAddReminder: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!briefing.isVisible) return
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.LIVE_BRIEFING_CARD),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Live Briefing",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                LiveBriefingStatusChip(status = briefing.status.ifBlank { if (briefing.isLoading) "loading" else "unknown" })
+            }
+
+            if (briefing.headline.isNotBlank()) {
+                Text(
+                    text = briefing.headline,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            if (briefing.weather.isNotBlank()) {
+                Text(
+                    text = briefing.weather,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (briefing.nextAction.isNotBlank()) {
+                Text(
+                    text = "Next: ${briefing.nextAction}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (briefing.dueReminders.isNotEmpty()) {
+                Text(
+                    text = "Due: ${briefing.dueReminders.joinToString { it.title }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            } else if (briefing.upcomingReminderCount > 0) {
+                Text(
+                    text = "Upcoming reminders: ${briefing.upcomingReminderCount}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            briefing.newsItems.take(3).forEach { item ->
+                Text(
+                    text = "- ${item.title}${item.source.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            briefing.errors.take(2).forEach { error ->
+                Text(
+                    text = "Warning: $error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (briefing.updatedAt.isNotBlank()) {
+                Text(
+                    text = "Updated: ${briefing.updatedAt}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = onRefresh,
+                    enabled = !briefing.isLoading && !briefing.isWatching,
+                    modifier = Modifier.testTag(AgentChatTags.LIVE_BRIEFING_REFRESH_BUTTON),
+                ) {
+                    Text("Refresh briefing")
+                }
+                TextButton(
+                    onClick = onAddReminder,
+                    enabled = !briefing.isLoading && !briefing.isWatching,
+                    modifier = Modifier.testTag(AgentChatTags.LIVE_BRIEFING_REMINDER_BUTTON),
+                ) {
+                    Text("Add 30s reminder")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveBriefingStatusChip(status: String) {
+    val color =
+        when (status) {
+            "fresh" -> MaterialTheme.colorScheme.primaryContainer
+            "partial" -> MaterialTheme.colorScheme.tertiaryContainer
+            "stale" -> MaterialTheme.colorScheme.errorContainer
+            else -> MaterialTheme.colorScheme.secondaryContainer
+        }
+    val contentColor =
+        when (status) {
+            "fresh" -> MaterialTheme.colorScheme.onPrimaryContainer
+            "partial" -> MaterialTheme.colorScheme.onTertiaryContainer
+            "stale" -> MaterialTheme.colorScheme.onErrorContainer
+            else -> MaterialTheme.colorScheme.onSecondaryContainer
+        }
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color,
+    ) {
+        Text(
+            text = status,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun ConversationHistory(
     messages: List<AgentChatMessage>,
@@ -1568,6 +1735,10 @@ object AgentChatTags {
     const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
     const val GITHUB_MCP_BUTTON = "agent_chat_github_mcp_button"
+    const val LIVE_BRIEFING_WATCH_BUTTON = "agent_chat_live_briefing_watch_button"
+    const val LIVE_BRIEFING_CARD = "agent_chat_live_briefing_card"
+    const val LIVE_BRIEFING_REFRESH_BUTTON = "agent_chat_live_briefing_refresh_button"
+    const val LIVE_BRIEFING_REMINDER_BUTTON = "agent_chat_live_briefing_reminder_button"
     const val CLEAR_BUTTON = "agent_chat_clear_button"
     const val STOP_BUTTON = "agent_chat_stop_button"
     const val TASK_STATE = "agent_chat_task_state"

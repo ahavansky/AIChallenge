@@ -16,13 +16,21 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import javax.inject.Inject
 
@@ -88,7 +96,10 @@ class AgentChatViewModel
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
                 AgentChatAction.CallGitHubRepositoryTool -> callGitHubRepositoryTool()
+                AgentChatAction.AddLiveBriefingDemoReminder -> addLiveBriefingDemoReminder()
                 AgentChatAction.ListFetchTools -> listFetchTools()
+                AgentChatAction.RefreshLiveBriefingMcp -> refreshLiveBriefing()
+                AgentChatAction.WatchLiveBriefingMcp -> watchLiveBriefing()
                 AgentChatAction.AcceptValidation -> acceptValidation()
                 AgentChatAction.ApprovePlan -> approvePlan()
                 AgentChatAction.PauseTask -> pauseTask()
@@ -949,6 +960,158 @@ class AgentChatViewModel
             }
         }
 
+        private fun watchLiveBriefing() {
+            val currentState = mutableUiState.value
+            if (!currentState.canWatchLiveBriefingMcp) return
+
+            mutableUiState.update { current ->
+                current.copy(
+                    liveBriefing =
+                        current.liveBriefing.copy(
+                            isVisible = true,
+                            isLoading = true,
+                            isWatching = true,
+                            statusMessage = "Starting Live Briefing MCP...",
+                        ),
+                    compareResults = emptyList(),
+                )
+            }
+
+            launchActiveRequest { requestId ->
+                val setupResult =
+                    callLiveBriefingTool(
+                        action = "demo_setup",
+                        arguments = buildJsonObject {},
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                if (!updateLiveBriefingFromToolResult(setupResult, isWatching = true)) return@launchActiveRequest
+                while (isCurrentRequest(requestId)) {
+                    delay(LIVE_BRIEFING_POLL_INTERVAL_MS)
+                    if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                    val summaryResult =
+                        callLiveBriefingTool(
+                            action = "summary",
+                            arguments = buildJsonObject {},
+                        )
+                    if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                    if (!updateLiveBriefingFromToolResult(summaryResult, isWatching = true)) return@launchActiveRequest
+                }
+            }
+        }
+
+        private fun refreshLiveBriefing() {
+            val currentState = mutableUiState.value
+            if (!currentState.canRefreshLiveBriefing) return
+            mutableUiState.update { current ->
+                current.copy(
+                    liveBriefing =
+                        current.liveBriefing.copy(
+                            isVisible = true,
+                            isLoading = true,
+                            statusMessage = "Refreshing Live Briefing MCP...",
+                        ),
+                )
+            }
+            launchActiveRequest { requestId ->
+                val result =
+                    callLiveBriefingTool(
+                        action = "refresh_now",
+                        arguments = buildJsonObject {},
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                updateLiveBriefingFromToolResult(result, isWatching = false)
+            }
+        }
+
+        private fun addLiveBriefingDemoReminder() {
+            val currentState = mutableUiState.value
+            if (!currentState.canAddLiveBriefingReminder) return
+            mutableUiState.update { current ->
+                current.copy(
+                    liveBriefing =
+                        current.liveBriefing.copy(
+                            isVisible = true,
+                            isLoading = true,
+                            statusMessage = "Adding demo reminder...",
+                        ),
+                )
+            }
+            launchActiveRequest { requestId ->
+                val result =
+                    callLiveBriefingTool(
+                        action = "add_reminder",
+                        arguments =
+                            buildJsonObject {
+                                put("title", "Check Live Briefing demo")
+                                put("body", "This reminder is due in 30 seconds for the demo recording.")
+                                put("delaySeconds", 30)
+                            },
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                updateLiveBriefingFromToolResult(result, isWatching = false)
+            }
+        }
+
+        private suspend fun callLiveBriefingTool(
+            action: String,
+            arguments: JsonObject,
+        ): McpToolCallResult =
+            mcpClient.callTool(
+                name = LIVE_BRIEFING_TOOL,
+                arguments =
+                    buildJsonObject {
+                        put("action", action)
+                        arguments.forEach { (key, value) -> put(key, value) }
+                    },
+            )
+
+        private fun updateLiveBriefingFromToolResult(
+            toolResult: McpToolCallResult,
+            isWatching: Boolean,
+        ): Boolean {
+            when (toolResult) {
+                is McpToolCallResult.Failure ->
+                    mutableUiState.update { current ->
+                        current.copy(
+                            liveBriefing =
+                                current.liveBriefing.copy(
+                                    isVisible = true,
+                                    isLoading = false,
+                                    isWatching = false,
+                                    statusMessage = toolResult.error.userMessage,
+                                    errors = listOf(toolResult.error.userMessage),
+                                ),
+                        )
+                    }
+                is McpToolCallResult.Success -> {
+                    val toolCall = toolResult.value
+                    val structuredContent = toolCall.structuredContent
+                    mutableUiState.update { current ->
+                        current.copy(
+                            liveBriefing =
+                                if (structuredContent != null) {
+                                    structuredContent.toLiveBriefingUiState(
+                                        previous = current.liveBriefing,
+                                        isLoading = false,
+                                        isWatching = isWatching && !toolCall.isError,
+                                        fallbackMessage = toolCall.contentText,
+                                    )
+                                } else {
+                                    current.liveBriefing.copy(
+                                        isVisible = true,
+                                        isLoading = false,
+                                        isWatching = false,
+                                        statusMessage = toolCall.contentText,
+                                        errors = if (toolCall.isError) listOf(toolCall.contentText) else current.liveBriefing.errors,
+                                    )
+                                },
+                        )
+                    }
+                }
+            }
+            return toolResult is McpToolCallResult.Success && !toolResult.value.isError
+        }
+
         private suspend fun sendInvariantCheckedMessage(
             preparedPrompt: AgentChatPreparedPrompt,
             invariants: AgentChatInvariantSet,
@@ -1072,6 +1235,12 @@ class AgentChatViewModel
                                         result
                                     }
                                 },
+                            liveBriefing =
+                                current.liveBriefing.copy(
+                                    isLoading = false,
+                                    isWatching = false,
+                                    statusMessage = "Stopped by user.",
+                                ),
                         )
                     stoppedState
                 }
@@ -1395,6 +1564,107 @@ class AgentChatViewModel
             }
         }
 
+        private fun JsonObject.toLiveBriefingUiState(
+            previous: AgentChatLiveBriefingUiState,
+            isLoading: Boolean,
+            isWatching: Boolean,
+            fallbackMessage: String,
+        ): AgentChatLiveBriefingUiState {
+            val weather = objectOrNull("weather")
+            val brief = objectOrNull("brief")
+            val reminders = objectOrNull("reminders")
+            val dueReminders =
+                reminders
+                    ?.arrayOrNull("due")
+                    ?.mapNotNull { element -> element.jsonObjectOrNull()?.toLiveBriefingReminder() }
+                    .orEmpty()
+            val upcomingReminderCount = reminders?.arrayOrNull("upcoming")?.size ?: 0
+            val errors =
+                arrayOrNull("errors")
+                    ?.mapNotNull { error ->
+                        val errorObject = error.jsonObjectOrNull() ?: return@mapNotNull null
+                        val source = errorObject.stringOrNull("source").orEmpty()
+                        val message = errorObject.stringOrNull("message").orEmpty()
+                        listOf(source, message).filter { it.isNotBlank() }.joinToString(separator = ": ")
+                    }.orEmpty()
+            val status = stringOrNull("status").orEmpty()
+            val city = stringOrNull("city").orEmpty().ifBlank { weather?.stringOrNull("city").orEmpty() }
+            val weatherSummary =
+                if (weather != null) {
+                    val temperature = weather.stringValue("temperatureCelsius")
+                    val apparent = weather.stringValue("apparentTemperatureCelsius")
+                    val precipitation = weather.stringValue("precipitationProbabilityPercent")
+                    val wind = weather.stringValue("windSpeedKmh")
+                    "$city: $temperature C, feels $apparent C, rain $precipitation%, wind $wind km/h"
+                } else {
+                    ""
+                }
+
+            return previous.copy(
+                isVisible = true,
+                isLoading = isLoading,
+                isWatching = isWatching,
+                status = status,
+                city = city,
+                weather = weatherSummary,
+                headline = brief?.stringOrNull("headline").orEmpty(),
+                bullets =
+                    brief
+                        ?.arrayOrNull("bullets")
+                        ?.mapNotNull { it.jsonPrimitiveOrNull()?.contentOrNull }
+                        .orEmpty(),
+                nextAction = brief?.stringOrNull("nextAction").orEmpty(),
+                newsItems =
+                    arrayOrNull("newsItems")
+                        ?.mapNotNull { element -> element.jsonObjectOrNull()?.toLiveBriefingNewsItem() }
+                        .orEmpty(),
+                dueReminders = dueReminders,
+                upcomingReminderCount = upcomingReminderCount,
+                errors = errors,
+                updatedAt = stringOrNull("generatedAt").orEmpty(),
+                statusMessage = fallbackMessage,
+            )
+        }
+
+        private fun JsonObject.toLiveBriefingNewsItem(): AgentChatLiveBriefingNewsItem? {
+            val title = stringOrNull("title")?.takeIf { it.isNotBlank() } ?: return null
+            return AgentChatLiveBriefingNewsItem(
+                title = title,
+                source = stringOrNull("source").orEmpty(),
+            )
+        }
+
+        private fun JsonObject.toLiveBriefingReminder(): AgentChatLiveBriefingReminder? {
+            val id = stringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
+            val title = stringOrNull("title")?.takeIf { it.isNotBlank() } ?: return null
+            return AgentChatLiveBriefingReminder(
+                id = id,
+                title = title,
+                nextDueAt = stringOrNull("nextDueAt").orEmpty(),
+            )
+        }
+
+        private fun JsonObject.stringValue(key: String): String =
+            this[key]
+                ?.jsonPrimitiveOrNull()
+                ?.contentOrNull
+                .orEmpty()
+
+        private fun JsonObject.stringOrNull(key: String): String? =
+            this[key]
+                ?.jsonPrimitiveOrNull()
+                ?.contentOrNull
+
+        private fun JsonObject.objectOrNull(key: String): JsonObject? = this[key]?.jsonObjectOrNull()
+
+        private fun JsonObject.arrayOrNull(key: String): JsonArray? = this[key]?.jsonArrayOrNull()
+
+        private fun JsonElement.jsonObjectOrNull(): JsonObject? = runCatching { jsonObject }.getOrNull()
+
+        private fun JsonElement.jsonArrayOrNull(): JsonArray? = runCatching { jsonArray }.getOrNull()
+
+        private fun JsonElement.jsonPrimitiveOrNull() = runCatching { jsonPrimitive }.getOrNull()
+
         private data class PlanningBranchRequest(
             val branch: AgentTaskBranch,
             val preparedPrompt: AgentChatPreparedPrompt,
@@ -1424,6 +1694,8 @@ class AgentChatViewModel
         private companion object {
             const val PROFILE_COMPARE_LIMIT = 3
             const val GITHUB_REPOSITORY_SUMMARY_TOOL = "github_repository_summary"
+            const val LIVE_BRIEFING_TOOL = "live_briefing"
+            const val LIVE_BRIEFING_POLL_INTERVAL_MS = 10_000L
             val GITHUB_PATH_SEGMENT_PATTERN = Regex("[A-Za-z0-9_.-]+")
         }
     }

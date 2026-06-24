@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -225,6 +226,7 @@ class RestMcpClient
                     name = name,
                     contentText = contentText,
                     isError = callResult["isError"]?.jsonPrimitive?.booleanOrNull == true,
+                    structuredContent = callResult["structuredContent"]?.jsonObjectOrNull(),
                 ),
             )
         }
@@ -385,6 +387,8 @@ class RestMcpClient
                 }?.joinToString(separator = "\n")
                 .orEmpty()
 
+        private fun JsonElement.jsonObjectOrNull(): JsonObject? = runCatching { jsonObject }.getOrNull()
+
         private fun JsonObject?.requiredInputNames(): List<String> =
             runCatching {
                 this
@@ -487,6 +491,7 @@ data class McpToolCall(
     val name: String,
     val contentText: String,
     val isError: Boolean,
+    val structuredContent: JsonObject? = null,
 )
 
 sealed interface McpNetworkError {
