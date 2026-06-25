@@ -17,6 +17,7 @@ data class AgentChatUiState(
     val lastInvariantCheck: AgentChatInvariantCheckSnapshot = AgentChatInvariantCheckSnapshot(),
     val compareResults: List<AgentChatProfileCompareResult> = emptyList(),
     val liveBriefing: AgentChatLiveBriefingUiState = AgentChatLiveBriefingUiState(),
+    val mcpPipeline: AgentChatMcpPipelineUiState = AgentChatMcpPipelineUiState(),
     val isLongTermMemoryDirty: Boolean = false,
     val isInvariantsDirty: Boolean = false,
 ) : UiState {
@@ -26,6 +27,7 @@ data class AgentChatUiState(
                 compareResults.any { it.isLoading } ||
                 liveBriefing.isLoading ||
                 liveBriefing.isWatching ||
+                mcpPipeline.isLoading ||
                 memory.taskState.status == AgentTaskStatus.RUNNING
 
     val canRunTask: Boolean
@@ -76,6 +78,9 @@ data class AgentChatUiState(
     val canUseGitHubMcp: Boolean
         get() = input.isNotBlank() && !isLoading
 
+    val canRunMcpPipeline: Boolean
+        get() = input.isNotBlank() && !isLoading
+
     val canWatchLiveBriefingMcp: Boolean
         get() = !isLoading
 
@@ -121,6 +126,22 @@ data class AgentChatLiveBriefingReminder(
     val id: String,
     val title: String,
     val nextDueAt: String,
+)
+
+data class AgentChatMcpPipelineUiState(
+    val isVisible: Boolean = false,
+    val isLoading: Boolean = false,
+    val isError: Boolean = false,
+    val query: String = "",
+    val resultCount: Int = 0,
+    val fileName: String = "",
+    val savedPath: String = "",
+    val byteSize: Long = 0L,
+    val markdownPreview: String = "",
+    val errorMessage: String = "",
+    val searchStatus: String = "",
+    val summarizeStatus: String = "",
+    val saveToFileStatus: String = "",
 )
 
 enum class AgentChatModelOption(
@@ -288,6 +309,8 @@ sealed interface AgentChatAction : UiEvent {
     data object ListFetchTools : AgentChatAction
 
     data object CallGitHubRepositoryTool : AgentChatAction
+
+    data object RunMcpPipeline : AgentChatAction
 
     data object WatchLiveBriefingMcp : AgentChatAction
 

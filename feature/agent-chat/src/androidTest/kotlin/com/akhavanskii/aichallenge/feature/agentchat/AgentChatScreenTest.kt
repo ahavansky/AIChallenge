@@ -108,6 +108,103 @@ class AgentChatScreenTest {
     }
 
     @Test
+    fun mcpPipelineButtonRequiresInputAndDispatchesAction() {
+        val actions = mutableListOf<AgentChatAction>()
+        var state by mutableStateOf(AgentChatUiState())
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state = state,
+                    onAction = { action ->
+                        actions += action
+                        if (action is AgentChatAction.InputChanged) {
+                            state = state.copy(input = action.input)
+                        }
+                    },
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.MCP_PIPELINE_BUTTON).assertIsNotEnabled()
+        composeRule.onNodeWithTag(AgentChatTags.INPUT).performTextInput("Kotlin")
+        composeRule
+            .onNodeWithTag(AgentChatTags.MCP_PIPELINE_BUTTON)
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .performClick()
+
+        assertEquals(AgentChatAction.RunMcpPipeline, actions.last())
+    }
+
+    @Test
+    fun mcpPipelineCardShowsSavedFilePreview() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            mcpPipeline =
+                                AgentChatMcpPipelineUiState(
+                                    isVisible = true,
+                                    query = "Kotlin",
+                                    resultCount = 1,
+                                    fileName = "kotlin-summary.md",
+                                    savedPath = "/private/tmp/mcp-pipeline/kotlin-summary.md",
+                                    byteSize = 38,
+                                    markdownPreview = "# MCP pipeline summary\n\nKotlin summary",
+                                    searchStatus = "ok",
+                                    summarizeStatus = "ok",
+                                    saveToFileStatus = "ok",
+                                ),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.MCP_PIPELINE_CARD).assertIsDisplayed()
+        composeRule.onNodeWithText("MCP Saved File").assertIsDisplayed()
+        composeRule.onNodeWithText("saved").assertIsDisplayed()
+        composeRule.onNodeWithText("kotlin-summary.md").assertIsDisplayed()
+        composeRule.onNodeWithText("/private/tmp/mcp-pipeline/kotlin-summary.md").assertIsDisplayed()
+        composeRule.onNodeWithText("38 B · 1 sources").assertIsDisplayed()
+        composeRule.onNodeWithText("Kotlin summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun mcpPipelineCardShowsFailedStep() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                AgentChatScreen(
+                    state =
+                        AgentChatUiState(
+                            mcpPipeline =
+                                AgentChatMcpPipelineUiState(
+                                    isVisible = true,
+                                    isError = true,
+                                    query = "Kotlin",
+                                    resultCount = 1,
+                                    errorMessage = "`results` must contain at least one search result.",
+                                    searchStatus = "ok",
+                                    summarizeStatus = "failed",
+                                    saveToFileStatus = "pending",
+                                ),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(AgentChatTags.MCP_PIPELINE_CARD).assertIsDisplayed()
+        composeRule.onNodeWithText("failed").assertIsDisplayed()
+        composeRule.onNodeWithText("summarize: failed").assertIsDisplayed()
+        composeRule.onNodeWithText("`results` must contain at least one search result.").assertIsDisplayed()
+    }
+
+    @Test
     fun taskStatePanelShowsCurrentStepAndDispatchesContinue() {
         val pausedTaskState =
             AgentTaskState(

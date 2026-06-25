@@ -21,6 +21,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -461,6 +463,119 @@ class AgentChatViewModelTest {
 
             assertEquals(1, fakeMcpClient.toolCallCount)
             assertFalse(viewModel.uiState.value.isLoading)
+        }
+
+    @Test
+    fun runMcpPipelineCallsToolsInOrderAndPassesStructuredData() =
+        runTest {
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResults =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(McpToolCallResult.Success(pipelineSearchToolCall())),
+                                CompletableDeferred(McpToolCallResult.Success(pipelineSummarizeToolCall())),
+                                CompletableDeferred(McpToolCallResult.Success(pipelineSaveToolCall())),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Kotlin"))
+            viewModel.onAction(AgentChatAction.RunMcpPipeline)
+            runCurrent()
+
+            assertEquals(listOf("search", "summarize", "saveToFile"), fakeMcpClient.toolNames)
+            assertEquals("Kotlin", fakeMcpClient.toolArguments[0]["query"]!!.jsonPrimitive.content)
+            assertEquals("en", fakeMcpClient.toolArguments[0]["language"]!!.jsonPrimitive.content)
+            assertEquals("3", fakeMcpClient.toolArguments[0]["limit"]!!.jsonPrimitive.content)
+
+            val summarizeArgs = fakeMcpClient.toolArguments[1]
+            assertEquals("Kotlin", summarizeArgs["query"]!!.jsonPrimitive.content)
+            val summarizeResult = summarizeArgs["results"]!!.jsonArray.single().jsonObject
+            assertEquals("Kotlin programming language", summarizeResult["title"]!!.jsonPrimitive.content)
+            assertEquals("Kotlin is a modern language.", summarizeResult["snippet"]!!.jsonPrimitive.content)
+
+            val saveArgs = fakeMcpClient.toolArguments[2]
+            assertEquals("Kotlin", saveArgs["query"]!!.jsonPrimitive.content)
+            assertEquals(
+                "# MCP pipeline summary\n\nKotlin summary",
+                saveArgs["summary"]!!.jsonObject["markdown"]!!.jsonPrimitive.content,
+            )
+
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertFalse(message.isError)
+            assertEquals("MCP pipeline completed. See saved file preview below.", message.text)
+
+            val pipeline = viewModel.uiState.value.mcpPipeline
+            assertTrue(pipeline.isVisible)
+            assertFalse(pipeline.isLoading)
+            assertFalse(pipeline.isError)
+            assertEquals("Kotlin", pipeline.query)
+            assertEquals(1, pipeline.resultCount)
+            assertEquals("kotlin-summary.md", pipeline.fileName)
+            assertEquals("/tmp/kotlin-summary.md", pipeline.savedPath)
+            assertEquals(38L, pipeline.byteSize)
+            assertEquals("# MCP pipeline summary\n\nKotlin summary", pipeline.markdownPreview)
+            assertEquals("ok", pipeline.searchStatus)
+            assertEquals("ok", pipeline.summarizeStatus)
+            assertEquals("ok", pipeline.saveToFileStatus)
+        }
+
+    @Test
+    fun runMcpPipelineStopsWhenMiddleStepFails() =
+        runTest {
+            val fakeMcpClient =
+                FakeMcpClient(
+                    toolResults =
+                        ArrayDeque(
+                            listOf(
+                                CompletableDeferred(McpToolCallResult.Success(pipelineSearchToolCall())),
+                                CompletableDeferred(
+                                    McpToolCallResult.Success(
+                                        McpToolCall(
+                                            name = "summarize",
+                                            contentText = "`results` must contain at least one search result.",
+                                            isError = true,
+                                        ),
+                                    ),
+                                ),
+                                CompletableDeferred(McpToolCallResult.Success(pipelineSaveToolCall())),
+                            ),
+                        ),
+                )
+            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            runCurrent()
+
+            viewModel.onAction(AgentChatAction.InputChanged("Kotlin"))
+            viewModel.onAction(AgentChatAction.RunMcpPipeline)
+            runCurrent()
+
+            assertEquals(listOf("search", "summarize"), fakeMcpClient.toolNames)
+            val message =
+                viewModel
+                    .uiState
+                    .value
+                    .messages
+                    .last()
+            assertTrue(message.isError)
+            assertTrue(message.text.contains("MCP pipeline failed at `summarize`"))
+            assertTrue(message.text.contains("See pipeline status below"))
+
+            val pipeline = viewModel.uiState.value.mcpPipeline
+            assertTrue(pipeline.isVisible)
+            assertFalse(pipeline.isLoading)
+            assertTrue(pipeline.isError)
+            assertEquals("ok", pipeline.searchStatus)
+            assertEquals("failed", pipeline.summarizeStatus)
+            assertEquals("pending", pipeline.saveToFileStatus)
+            assertTrue(pipeline.errorMessage.contains("`results` must contain at least one search result."))
         }
 
     @Test
@@ -1151,6 +1266,9 @@ class AgentChatViewModelTest {
         var lastArguments: JsonObject? = null
             private set
 
+        val toolNames = mutableListOf<String>()
+        val toolArguments = mutableListOf<JsonObject>()
+
         override suspend fun listTools(): McpDiscoveryResult<McpToolDiscovery> {
             callCount += 1
             val result =
@@ -1169,6 +1287,8 @@ class AgentChatViewModelTest {
             toolCallCount += 1
             lastToolName = name
             lastArguments = arguments
+            toolNames += name
+            toolArguments += arguments
             val result =
                 if (toolResults.size > 1) {
                     toolResults.removeFirst()
@@ -1178,6 +1298,66 @@ class AgentChatViewModelTest {
             return result.await()
         }
     }
+
+    private fun pipelineSearchToolCall(): McpToolCall =
+        McpToolCall(
+            name = "search",
+            contentText = "Search results for \"Kotlin\"",
+            isError = false,
+            structuredContent =
+                buildJsonObject {
+                    put("query", "Kotlin")
+                    put("language", "en")
+                    putJsonArray("results") {
+                        add(
+                            buildJsonObject {
+                                put("title", "Kotlin programming language")
+                                put("snippet", "Kotlin is a modern language.")
+                                put("url", "https://en.wikipedia.org/wiki/Kotlin")
+                            },
+                        )
+                    }
+                },
+        )
+
+    private fun pipelineSummarizeToolCall(): McpToolCall =
+        McpToolCall(
+            name = "summarize",
+            contentText = "# MCP pipeline summary\n\nKotlin summary",
+            isError = false,
+            structuredContent =
+                buildJsonObject {
+                    putJsonObject("summary") {
+                        put("query", "Kotlin")
+                        put("sourceCount", 1)
+                        put("markdown", "# MCP pipeline summary\n\nKotlin summary")
+                        putJsonArray("sources") {
+                            add(
+                                buildJsonObject {
+                                    put("title", "Kotlin programming language")
+                                    put("url", "https://en.wikipedia.org/wiki/Kotlin")
+                                },
+                            )
+                        }
+                    }
+                },
+        )
+
+    private fun pipelineSaveToolCall(): McpToolCall =
+        McpToolCall(
+            name = "saveToFile",
+            contentText = "Saved MCP pipeline summary to /tmp/kotlin-summary.md.",
+            isError = false,
+            structuredContent =
+                buildJsonObject {
+                    putJsonObject("savedFile") {
+                        put("path", "/tmp/kotlin-summary.md")
+                        put("fileName", "kotlin-summary.md")
+                        put("byteSize", 38)
+                        put("markdown", "# MCP pipeline summary\n\nKotlin summary")
+                    }
+                },
+        )
 
     private fun liveBriefingToolCall(): McpToolCall =
         McpToolCall(

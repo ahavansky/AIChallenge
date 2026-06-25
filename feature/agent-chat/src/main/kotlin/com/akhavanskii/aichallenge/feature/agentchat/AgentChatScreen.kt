@@ -174,6 +174,11 @@ fun AgentChatScreen(
                 onAddReminder = { onAction(AgentChatAction.AddLiveBriefingDemoReminder) },
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            McpPipelineResultPanel(
+                pipeline = state.mcpPipeline,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         if (!shouldHideComposer) {
@@ -220,6 +225,13 @@ fun AgentChatScreen(
                     modifier = Modifier.testTag(AgentChatTags.LIVE_BRIEFING_WATCH_BUTTON),
                 ) {
                     Text("Watch Live Briefing MCP")
+                }
+                TextButton(
+                    onClick = { onAction(AgentChatAction.RunMcpPipeline) },
+                    enabled = state.canRunMcpPipeline,
+                    modifier = Modifier.testTag(AgentChatTags.MCP_PIPELINE_BUTTON),
+                ) {
+                    Text("Run MCP Pipeline")
                 }
                 TextButton(
                     onClick = { onAction(AgentChatAction.CallGitHubRepositoryTool) },
@@ -1480,6 +1492,149 @@ private fun ProfileCompareResults(
     }
 }
 
+@Composable
+private fun McpPipelineResultPanel(
+    pipeline: AgentChatMcpPipelineUiState,
+    modifier: Modifier = Modifier,
+) {
+    if (!pipeline.isVisible) return
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.MCP_PIPELINE_CARD),
+        shape = RoundedCornerShape(8.dp),
+        color = if (pipeline.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "MCP Saved File",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                McpPipelineStatusChip(
+                    status =
+                        when {
+                            pipeline.isLoading -> "loading"
+                            pipeline.isError -> "failed"
+                            else -> "saved"
+                        },
+                    isError = pipeline.isError,
+                )
+            }
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                McpPipelineStatusChip(status = "search: ${pipeline.searchStatus.ifBlank { "pending" }}")
+                McpPipelineStatusChip(status = "summarize: ${pipeline.summarizeStatus.ifBlank { "pending" }}")
+                McpPipelineStatusChip(status = "save: ${pipeline.saveToFileStatus.ifBlank { "pending" }}")
+            }
+
+            if (pipeline.query.isNotBlank()) {
+                Text(
+                    text = "Query: ${pipeline.query}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (pipeline.isError) {
+                Text(
+                    text = pipeline.errorMessage.ifBlank { "MCP pipeline failed." },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            } else {
+                FileMetadataLine(
+                    label = "File",
+                    value = pipeline.fileName.ifBlank { "Waiting for save result" },
+                )
+                FileMetadataLine(
+                    label = "Host path",
+                    value = pipeline.savedPath.ifBlank { "Not saved yet" },
+                )
+                FileMetadataLine(
+                    label = "Size",
+                    value = "${pipeline.byteSize.formatBytes()} · ${pipeline.resultCount} sources",
+                )
+                if (pipeline.markdownPreview.isNotBlank()) {
+                    Text(
+                        text = "Preview",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    ChallengeMarkdownBody(
+                        body = pipeline.markdownPreview,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun McpPipelineStatusChip(
+    status: String,
+    isError: Boolean = false,
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            text = status,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun FileMetadataLine(
+    label: String,
+    value: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+private fun Long.formatBytes(): String =
+    when {
+        this < 1_024L -> "$this B"
+        this < 1_048_576L -> "${this / 1_024L} KB"
+        else -> "${this / 1_048_576L} MB"
+    }
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LiveBriefingPanel(
@@ -1735,6 +1890,8 @@ object AgentChatTags {
     const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
     const val GITHUB_MCP_BUTTON = "agent_chat_github_mcp_button"
+    const val MCP_PIPELINE_BUTTON = "agent_chat_mcp_pipeline_button"
+    const val MCP_PIPELINE_CARD = "agent_chat_mcp_pipeline_card"
     const val LIVE_BRIEFING_WATCH_BUTTON = "agent_chat_live_briefing_watch_button"
     const val LIVE_BRIEFING_CARD = "agent_chat_live_briefing_card"
     const val LIVE_BRIEFING_REFRESH_BUTTON = "agent_chat_live_briefing_refresh_button"

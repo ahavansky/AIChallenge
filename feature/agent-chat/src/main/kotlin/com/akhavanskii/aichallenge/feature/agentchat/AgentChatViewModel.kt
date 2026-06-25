@@ -7,6 +7,8 @@ import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.LlmAgent
 import com.akhavanskii.aichallenge.core.network.McpClient
 import com.akhavanskii.aichallenge.core.network.McpDiscoveryResult
+import com.akhavanskii.aichallenge.core.network.McpNetworkError
+import com.akhavanskii.aichallenge.core.network.McpToolCall
 import com.akhavanskii.aichallenge.core.network.McpToolCallResult
 import com.akhavanskii.aichallenge.core.network.McpToolDiscovery
 import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
@@ -96,6 +98,7 @@ class AgentChatViewModel
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
                 AgentChatAction.CallGitHubRepositoryTool -> callGitHubRepositoryTool()
+                AgentChatAction.RunMcpPipeline -> runMcpPipeline()
                 AgentChatAction.AddLiveBriefingDemoReminder -> addLiveBriefingDemoReminder()
                 AgentChatAction.ListFetchTools -> listFetchTools()
                 AgentChatAction.RefreshLiveBriefingMcp -> refreshLiveBriefing()
@@ -960,6 +963,172 @@ class AgentChatViewModel
             }
         }
 
+        private fun runMcpPipeline() {
+            val currentState = mutableUiState.value
+            if (!currentState.canRunMcpPipeline) return
+
+            val query = currentState.input.normalizedPromptOrNull()
+            if (query == null) {
+                appendLocalError("Enter a search query before running MCP pipeline.")
+                return
+            }
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(
+                        input = "",
+                        messages =
+                            current.messages +
+                                AgentChatMessage(role = AgentChatRole.USER, text = query) +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Running MCP pipeline...",
+                                    isLoading = true,
+                                ),
+                        compareResults = emptyList(),
+                        mcpPipeline =
+                            AgentChatMcpPipelineUiState(
+                                isVisible = true,
+                                isLoading = true,
+                                query = query,
+                                searchStatus = MCP_PIPELINE_STATUS_RUNNING,
+                                summarizeStatus = MCP_PIPELINE_STATUS_PENDING,
+                                saveToFileStatus = MCP_PIPELINE_STATUS_PENDING,
+                            ),
+                    )
+                }
+            persistHistory(updatedState)
+
+            launchActiveRequest { requestId ->
+                val searchStep =
+                    callMcpPipelineStep(
+                        stepName = SEARCH_TOOL,
+                        arguments =
+                            buildJsonObject {
+                                put("query", query)
+                                put("language", "en")
+                                put("limit", DEFAULT_MCP_PIPELINE_LIMIT)
+                            },
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                val searchCall = searchStep.toolCallOrReportFailure() ?: return@launchActiveRequest
+                val searchContent =
+                    searchCall.structuredContent ?: return@launchActiveRequest replaceMissingPipelineData(
+                        stepName = SEARCH_TOOL,
+                        fieldName = "structuredContent",
+                    )
+                val results =
+                    searchContent["results"] ?: return@launchActiveRequest replaceMissingPipelineData(
+                        stepName = SEARCH_TOOL,
+                        fieldName = "structuredContent.results",
+                    )
+                val searchQuery = searchContent["query"]
+                val resultCount = results.jsonArrayOrNull()?.size ?: 0
+                updateMcpPipelineStatus {
+                    copy(
+                        resultCount = resultCount,
+                        searchStatus = MCP_PIPELINE_STATUS_OK,
+                        summarizeStatus = MCP_PIPELINE_STATUS_RUNNING,
+                    )
+                }
+
+                val summarizeStep =
+                    callMcpPipelineStep(
+                        stepName = SUMMARIZE_TOOL,
+                        arguments =
+                            buildJsonObject {
+                                if (searchQuery != null) {
+                                    put("query", searchQuery)
+                                } else {
+                                    put("query", query)
+                                }
+                                put("results", results)
+                            },
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                val summarizeCall = summarizeStep.toolCallOrReportFailure() ?: return@launchActiveRequest
+                val summaryContent =
+                    summarizeCall.structuredContent ?: return@launchActiveRequest replaceMissingPipelineData(
+                        stepName = SUMMARIZE_TOOL,
+                        fieldName = "structuredContent",
+                    )
+                val summary =
+                    summaryContent["summary"] ?: return@launchActiveRequest replaceMissingPipelineData(
+                        stepName = SUMMARIZE_TOOL,
+                        fieldName = "structuredContent.summary",
+                    )
+                val summaryQuery = summary.jsonObjectOrNull()?.get("query")
+                updateMcpPipelineStatus {
+                    copy(
+                        summarizeStatus = MCP_PIPELINE_STATUS_OK,
+                        saveToFileStatus = MCP_PIPELINE_STATUS_RUNNING,
+                    )
+                }
+
+                val saveStep =
+                    callMcpPipelineStep(
+                        stepName = SAVE_TO_FILE_TOOL,
+                        arguments =
+                            buildJsonObject {
+                                when {
+                                    summaryQuery != null -> put("query", summaryQuery)
+                                    searchQuery != null -> put("query", searchQuery)
+                                    else -> put("query", query)
+                                }
+                                put("summary", summary)
+                            },
+                    )
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+                val saveCall = saveStep.toolCallOrReportFailure() ?: return@launchActiveRequest
+
+                updateMcpPipelineSuccess(
+                    query = query,
+                    resultCount = resultCount,
+                    saveCall = saveCall,
+                )
+                replaceLoadingMessage("MCP pipeline completed. See saved file preview below.")
+            }
+        }
+
+        private suspend fun callMcpPipelineStep(
+            stepName: String,
+            arguments: JsonObject,
+        ): McpPipelineStepResult =
+            when (val result = mcpClient.callTool(name = stepName, arguments = arguments)) {
+                is McpToolCallResult.Failure ->
+                    McpPipelineStepResult.Failure(
+                        stepName = stepName,
+                        message = result.error.toMcpPipelineMessage(),
+                    )
+                is McpToolCallResult.Success ->
+                    if (result.value.isError) {
+                        McpPipelineStepResult.Failure(stepName = stepName, message = result.value.contentText)
+                    } else {
+                        McpPipelineStepResult.Success(result.value)
+                    }
+            }
+
+        private fun McpPipelineStepResult.toolCallOrReportFailure(): McpToolCall? =
+            when (this) {
+                is McpPipelineStepResult.Success -> toolCall
+                is McpPipelineStepResult.Failure -> {
+                    updateMcpPipelineFailure(stepName = stepName, message = message)
+                    replaceLoadingMessage("MCP pipeline failed at `$stepName`. See pipeline status below.", isError = true)
+                    null
+                }
+            }
+
+        private fun replaceMissingPipelineData(
+            stepName: String,
+            fieldName: String,
+        ) {
+            val message = "MCP tool `$stepName` did not return `$fieldName` for the next pipeline step."
+            updateMcpPipelineFailure(stepName = stepName, message = message)
+            replaceLoadingMessage(
+                "MCP pipeline failed at `$stepName`. See pipeline status below.",
+                isError = true,
+            )
+        }
+
         private fun watchLiveBriefing() {
             val currentState = mutableUiState.value
             if (!currentState.canWatchLiveBriefingMcp) return
@@ -1241,6 +1410,17 @@ class AgentChatViewModel
                                     isWatching = false,
                                     statusMessage = "Stopped by user.",
                                 ),
+                            mcpPipeline =
+                                current.mcpPipeline.copy(
+                                    isLoading = false,
+                                    isError = current.mcpPipeline.isLoading,
+                                    errorMessage =
+                                        if (current.mcpPipeline.isLoading) {
+                                            "Stopped by user."
+                                        } else {
+                                            current.mcpPipeline.errorMessage
+                                        },
+                                ),
                         )
                     stoppedState
                 }
@@ -1426,6 +1606,102 @@ class AgentChatViewModel
 
             $error
             """.trimIndent()
+
+        private fun updateMcpPipelineStatus(transform: AgentChatMcpPipelineUiState.() -> AgentChatMcpPipelineUiState) {
+            mutableUiState.update { current ->
+                current.copy(mcpPipeline = current.mcpPipeline.transform())
+            }
+        }
+
+        private fun updateMcpPipelineSuccess(
+            query: String,
+            resultCount: Int,
+            saveCall: McpToolCall,
+        ) {
+            val savedFile = saveCall.structuredContent?.objectOrNull("savedFile")
+            val path =
+                savedFile
+                    ?.stringOrNull("path")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: saveCall.contentText
+            val markdown =
+                savedFile
+                    ?.stringOrNull("markdown")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: saveCall.contentText
+            val fileName =
+                savedFile
+                    ?.stringOrNull("fileName")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: path.substringAfterLast('/').substringAfterLast('\\')
+            val byteSize =
+                savedFile
+                    ?.longOrNull("byteSize")
+                    ?: markdown.toByteArray().size.toLong()
+
+            updateMcpPipelineStatus {
+                copy(
+                    isVisible = true,
+                    isLoading = false,
+                    isError = false,
+                    query = query,
+                    resultCount = resultCount,
+                    fileName = fileName,
+                    savedPath = path,
+                    byteSize = byteSize,
+                    markdownPreview = markdown,
+                    errorMessage = "",
+                    searchStatus = MCP_PIPELINE_STATUS_OK,
+                    summarizeStatus = MCP_PIPELINE_STATUS_OK,
+                    saveToFileStatus = MCP_PIPELINE_STATUS_OK,
+                )
+            }
+        }
+
+        private fun updateMcpPipelineFailure(
+            stepName: String,
+            message: String,
+        ) {
+            updateMcpPipelineStatus {
+                copy(
+                    isVisible = true,
+                    isLoading = false,
+                    isError = true,
+                    errorMessage = message,
+                    searchStatus =
+                        if (stepName == SEARCH_TOOL) {
+                            MCP_PIPELINE_STATUS_FAILED
+                        } else {
+                            searchStatus.ifBlank { MCP_PIPELINE_STATUS_PENDING }
+                        },
+                    summarizeStatus =
+                        if (stepName == SUMMARIZE_TOOL) {
+                            MCP_PIPELINE_STATUS_FAILED
+                        } else {
+                            summarizeStatus.ifBlank { MCP_PIPELINE_STATUS_PENDING }
+                        },
+                    saveToFileStatus =
+                        if (stepName == SAVE_TO_FILE_TOOL) {
+                            MCP_PIPELINE_STATUS_FAILED
+                        } else {
+                            saveToFileStatus.ifBlank { MCP_PIPELINE_STATUS_PENDING }
+                        },
+                )
+            }
+        }
+
+        private fun McpNetworkError.toMcpPipelineMessage(): String {
+            val message = userMessage
+            return if (message.contains("Unknown tool", ignoreCase = true)) {
+                """
+                $message
+
+                Start `rtk ./gradlew :mcp:pipeline-server:run` or set `MCP_SERVER_URL` to the pipeline server.
+                """.trimIndent()
+            } else {
+                message
+            }
+        }
 
         private fun updateStateAndPersist(transform: (AgentChatUiState) -> AgentChatUiState) {
             val updatedState = mutableUiState.updateAndGet(transform)
@@ -1655,6 +1931,12 @@ class AgentChatViewModel
                 ?.jsonPrimitiveOrNull()
                 ?.contentOrNull
 
+        private fun JsonObject.longOrNull(key: String): Long? =
+            this[key]
+                ?.jsonPrimitiveOrNull()
+                ?.contentOrNull
+                ?.toLongOrNull()
+
         private fun JsonObject.objectOrNull(key: String): JsonObject? = this[key]?.jsonObjectOrNull()
 
         private fun JsonObject.arrayOrNull(key: String): JsonArray? = this[key]?.jsonArrayOrNull()
@@ -1680,6 +1962,17 @@ class AgentChatViewModel
             ) : InvariantCheckedLlmResult
         }
 
+        private sealed interface McpPipelineStepResult {
+            data class Success(
+                val toolCall: McpToolCall,
+            ) : McpPipelineStepResult
+
+            data class Failure(
+                val stepName: String,
+                val message: String,
+            ) : McpPipelineStepResult
+        }
+
         private data class PlanningBranchResult(
             val branchId: AgentTaskBranchId,
             val artifact: AgentTaskArtifact? = null,
@@ -1694,6 +1987,14 @@ class AgentChatViewModel
         private companion object {
             const val PROFILE_COMPARE_LIMIT = 3
             const val GITHUB_REPOSITORY_SUMMARY_TOOL = "github_repository_summary"
+            const val SEARCH_TOOL = "search"
+            const val SUMMARIZE_TOOL = "summarize"
+            const val SAVE_TO_FILE_TOOL = "saveToFile"
+            const val DEFAULT_MCP_PIPELINE_LIMIT = 3
+            const val MCP_PIPELINE_STATUS_PENDING = "pending"
+            const val MCP_PIPELINE_STATUS_RUNNING = "running"
+            const val MCP_PIPELINE_STATUS_OK = "ok"
+            const val MCP_PIPELINE_STATUS_FAILED = "failed"
             const val LIVE_BRIEFING_TOOL = "live_briefing"
             const val LIVE_BRIEFING_POLL_INTERVAL_MS = 10_000L
             val GITHUB_PATH_SEGMENT_PATTERN = Regex("[A-Za-z0-9_.-]+")
