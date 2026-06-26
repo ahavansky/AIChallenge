@@ -89,12 +89,39 @@ android {
             .get()
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
+    val mcpSearchServerUrl =
+        providers
+            .gradleProperty("MCP_SEARCH_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_SEARCH_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_SEARCH_SERVER_URL") ?: "http://10.0.2.2:8766/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+    val mcpSummarizeServerUrl =
+        providers
+            .gradleProperty("MCP_SUMMARIZE_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_SUMMARIZE_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_SUMMARIZE_SERVER_URL") ?: "http://10.0.2.2:8767/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+    val mcpSaveServerUrl =
+        providers
+            .gradleProperty("MCP_SAVE_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_SAVE_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_SAVE_SERVER_URL") ?: "http://10.0.2.2:8768/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
 
     defaultConfig {
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         buildConfigField("String", "HUGGINGFACE_API_KEY", "\"$huggingFaceApiKey\"")
         buildConfigField("String", "DEEPSEEK_API_KEY", "\"$deepSeekApiKey\"")
         buildConfigField("String", "MCP_SERVER_URL", "\"$mcpServerUrl\"")
+        buildConfigField("String", "MCP_SEARCH_SERVER_URL", "\"$mcpSearchServerUrl\"")
+        buildConfigField("String", "MCP_SUMMARIZE_SERVER_URL", "\"$mcpSummarizeServerUrl\"")
+        buildConfigField("String", "MCP_SAVE_SERVER_URL", "\"$mcpSaveServerUrl\"")
     }
 
     packaging {

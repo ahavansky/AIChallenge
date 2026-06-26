@@ -22,7 +22,7 @@ Modules:
 - `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
 - `:mcp:github-server` - Standalone JVM MCP HTTP server that exposes a read-only GitHub repository summary tool backed by the live GitHub REST API.
 - `:mcp:live-briefing-server` - Standalone JVM MCP HTTP server that periodically refreshes a live user briefing from Open-Meteo weather, allowlisted RSS feeds, and local reminders persisted in JSON.
-- `:mcp:pipeline-server` - Standalone JVM MCP HTTP server that exposes a three-tool pipeline: live Wikipedia search, deterministic summary, and host-side Markdown file save.
+- `:mcp:pipeline-search-server`, `:mcp:pipeline-summarize-server`, `:mcp:pipeline-save-server` - three standalone JVM MCP HTTP servers for the demo pipeline: live Wikipedia search, deterministic summary, and host-side Markdown file save.
 
 There is intentionally no `:core:domain`: the first feature has no reusable business rules that justify a separate domain layer.
 
@@ -94,21 +94,27 @@ MCP_LIVE_BRIEFING_DEMO_CITY=San Francisco
 
 The briefing uses Open-Meteo geocoding and forecast APIs plus built-in HTTPS RSS feeds (`bbc_world`, `hacker_news`, `nasa_breaking`). Tool results include text and optional `structuredContent`, so the Android screen can render weather, headlines, reminder state, stale/partial status, and the next action without parsing prose. External RSS text is treated as untrusted data. The JVM process must stay running for scheduled refreshes and reminder checks; for a background demo run, use the Gradle-installed distribution script after `rtk ./gradlew :mcp:live-briefing-server:installDist`.
 
-For the multi-tool MCP pipeline demo, start the Pipeline MCP server:
+For the multi-server MCP pipeline demo, start all three Pipeline MCP servers in separate terminals:
 
 ```bash
-rtk ./gradlew :mcp:pipeline-server:run
+rtk ./gradlew :mcp:pipeline-search-server:run
+rtk ./gradlew :mcp:pipeline-summarize-server:run
+rtk env MCP_PIPELINE_OUTPUT_DIR=/absolute/path/output ./gradlew :mcp:pipeline-save-server:run
 ```
 
-The server exposes `search`, `summarize`, and `saveToFile`. `search` calls the live Wikipedia API, so the demo requires internet access. `summarize` creates a deterministic extractive Markdown summary from the exact `structuredContent.results` returned by `search`. `saveToFile` writes the exact summary to the host machine running the MCP server, not to Android device storage. The default output directory is `build/mcp-pipeline`.
+The servers expose one tool each: `search` on port `8766`, `summarize` on port `8767`, and `saveToFile` on port `8768`. `search` calls the live Wikipedia API, so the demo requires internet access. `summarize` creates a deterministic extractive Markdown summary from the exact `structuredContent.results` returned by `search`. `saveToFile` writes the exact summary to the host machine running the Save MCP server, not to Android device storage. The default output directory is `build/mcp-pipeline`.
 
 ```properties
-MCP_PIPELINE_SERVER_PORT=8766
+MCP_SEARCH_SERVER_URL=http://10.0.2.2:8766/mcp
+MCP_SUMMARIZE_SERVER_URL=http://10.0.2.2:8767/mcp
+MCP_SAVE_SERVER_URL=http://10.0.2.2:8768/mcp
+MCP_SEARCH_SERVER_PORT=8766
+MCP_SUMMARIZE_SERVER_PORT=8767
+MCP_SAVE_SERVER_PORT=8768
 MCP_PIPELINE_OUTPUT_DIR=/absolute/path/output
-MCP_SERVER_URL=http://10.0.2.2:8766/mcp
 ```
 
-The pipeline server defaults to port `8766` so it can coexist with the older GitHub and Live Briefing examples that usually use `8765`. In Agent Chat, enter a query and tap `Run MCP Pipeline`; the app calls `search -> summarize -> saveToFile` automatically and shows a saved-file preview card with the step trace, file name, host path, byte size, source count, and rendered Markdown content. If the app reports an unknown MCP tool, point `MCP_SERVER_URL` to the pipeline server or start the command above.
+The pipeline servers default to ports `8766`, `8767`, and `8768`, so they can coexist with the older GitHub and Live Briefing examples that usually use `8765`. In Agent Chat, enter a query and tap `Run MCP Pipeline`; the app calls `search -> summarize -> saveToFile` across the three servers, passes parsed `structuredContent` between calls, and shows a saved-file preview card with the step trace, file name, host path, byte size, source count, and rendered Markdown content. If the app reports an unknown MCP tool, verify that all three servers are running and set `MCP_SEARCH_SERVER_URL`, `MCP_SUMMARIZE_SERVER_URL`, and `MCP_SAVE_SERVER_URL` to the matching endpoints.
 
 ## Gemini Parameter Comparison
 

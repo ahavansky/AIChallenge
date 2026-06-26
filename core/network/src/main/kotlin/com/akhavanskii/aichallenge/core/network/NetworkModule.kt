@@ -24,6 +24,18 @@ annotation class NetworkDispatcher
 @Retention(AnnotationRetention.BINARY)
 annotation class HuggingFaceCallFactory
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class PipelineSearchMcpClient
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class PipelineSummarizeMcpClient
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class PipelineSaveMcpClient
+
 @Module
 @InstallIn(SingletonComponent::class)
 interface NetworkBindings {
@@ -97,4 +109,52 @@ object NetworkModule {
     @Provides
     @NetworkDispatcher
     fun provideNetworkDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @Provides
+    @Singleton
+    @PipelineSearchMcpClient
+    fun providePipelineSearchMcpClient(
+        @Named(MCP_SEARCH_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
+
+    @Provides
+    @Singleton
+    @PipelineSummarizeMcpClient
+    fun providePipelineSummarizeMcpClient(
+        @Named(MCP_SUMMARIZE_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
+
+    @Provides
+    @Singleton
+    @PipelineSaveMcpClient
+    fun providePipelineSaveMcpClient(
+        @Named(MCP_SAVE_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
 }

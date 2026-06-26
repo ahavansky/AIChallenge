@@ -468,36 +468,45 @@ class AgentChatViewModelTest {
     @Test
     fun runMcpPipelineCallsToolsInOrderAndPassesStructuredData() =
         runTest {
-            val fakeMcpClient =
+            val searchClient =
                 FakeMcpClient(
-                    toolResults =
-                        ArrayDeque(
-                            listOf(
-                                CompletableDeferred(McpToolCallResult.Success(pipelineSearchToolCall())),
-                                CompletableDeferred(McpToolCallResult.Success(pipelineSummarizeToolCall())),
-                                CompletableDeferred(McpToolCallResult.Success(pipelineSaveToolCall())),
-                            ),
-                        ),
+                    toolResult = McpToolCallResult.Success(pipelineSearchToolCall()),
                 )
-            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            val summarizeClient =
+                FakeMcpClient(
+                    toolResult = McpToolCallResult.Success(pipelineSummarizeToolCall()),
+                )
+            val saveClient =
+                FakeMcpClient(
+                    toolResult = McpToolCallResult.Success(pipelineSaveToolCall()),
+                )
+            val viewModel =
+                createViewModel(
+                    pipelineSearchMcpClient = searchClient,
+                    pipelineSummarizeMcpClient = summarizeClient,
+                    pipelineSaveMcpClient = saveClient,
+                )
             runCurrent()
 
             viewModel.onAction(AgentChatAction.InputChanged("Kotlin"))
             viewModel.onAction(AgentChatAction.RunMcpPipeline)
             runCurrent()
 
-            assertEquals(listOf("search", "summarize", "saveToFile"), fakeMcpClient.toolNames)
-            assertEquals("Kotlin", fakeMcpClient.toolArguments[0]["query"]!!.jsonPrimitive.content)
-            assertEquals("en", fakeMcpClient.toolArguments[0]["language"]!!.jsonPrimitive.content)
-            assertEquals("3", fakeMcpClient.toolArguments[0]["limit"]!!.jsonPrimitive.content)
+            assertEquals(listOf("search"), searchClient.toolNames)
+            assertEquals(listOf("summarize"), summarizeClient.toolNames)
+            assertEquals(listOf("saveToFile"), saveClient.toolNames)
+            val searchArgs = searchClient.toolArguments.single()
+            assertEquals("Kotlin", searchArgs["query"]!!.jsonPrimitive.content)
+            assertEquals("en", searchArgs["language"]!!.jsonPrimitive.content)
+            assertEquals("3", searchArgs["limit"]!!.jsonPrimitive.content)
 
-            val summarizeArgs = fakeMcpClient.toolArguments[1]
+            val summarizeArgs = summarizeClient.toolArguments.single()
             assertEquals("Kotlin", summarizeArgs["query"]!!.jsonPrimitive.content)
             val summarizeResult = summarizeArgs["results"]!!.jsonArray.single().jsonObject
             assertEquals("Kotlin programming language", summarizeResult["title"]!!.jsonPrimitive.content)
             assertEquals("Kotlin is a modern language.", summarizeResult["snippet"]!!.jsonPrimitive.content)
 
-            val saveArgs = fakeMcpClient.toolArguments[2]
+            val saveArgs = saveClient.toolArguments.single()
             assertEquals("Kotlin", saveArgs["query"]!!.jsonPrimitive.content)
             assertEquals(
                 "# MCP pipeline summary\n\nKotlin summary",
@@ -531,33 +540,40 @@ class AgentChatViewModelTest {
     @Test
     fun runMcpPipelineStopsWhenMiddleStepFails() =
         runTest {
-            val fakeMcpClient =
+            val searchClient =
                 FakeMcpClient(
-                    toolResults =
-                        ArrayDeque(
-                            listOf(
-                                CompletableDeferred(McpToolCallResult.Success(pipelineSearchToolCall())),
-                                CompletableDeferred(
-                                    McpToolCallResult.Success(
-                                        McpToolCall(
-                                            name = "summarize",
-                                            contentText = "`results` must contain at least one search result.",
-                                            isError = true,
-                                        ),
-                                    ),
-                                ),
-                                CompletableDeferred(McpToolCallResult.Success(pipelineSaveToolCall())),
+                    toolResult = McpToolCallResult.Success(pipelineSearchToolCall()),
+                )
+            val summarizeClient =
+                FakeMcpClient(
+                    toolResult =
+                        McpToolCallResult.Success(
+                            McpToolCall(
+                                name = "summarize",
+                                contentText = "`results` must contain at least one search result.",
+                                isError = true,
                             ),
                         ),
                 )
-            val viewModel = createViewModel(mcpClient = fakeMcpClient)
+            val saveClient =
+                FakeMcpClient(
+                    toolResult = McpToolCallResult.Success(pipelineSaveToolCall()),
+                )
+            val viewModel =
+                createViewModel(
+                    pipelineSearchMcpClient = searchClient,
+                    pipelineSummarizeMcpClient = summarizeClient,
+                    pipelineSaveMcpClient = saveClient,
+                )
             runCurrent()
 
             viewModel.onAction(AgentChatAction.InputChanged("Kotlin"))
             viewModel.onAction(AgentChatAction.RunMcpPipeline)
             runCurrent()
 
-            assertEquals(listOf("search", "summarize"), fakeMcpClient.toolNames)
+            assertEquals(listOf("search"), searchClient.toolNames)
+            assertEquals(listOf("summarize"), summarizeClient.toolNames)
+            assertEquals(emptyList<String>(), saveClient.toolNames)
             val message =
                 viewModel
                     .uiState
@@ -1190,6 +1206,9 @@ class AgentChatViewModelTest {
         userProfileStore: AgentChatUserProfileStore = FakeAgentChatUserProfileStore(),
         invariantStore: AgentChatInvariantStore = FakeAgentChatInvariantStore(),
         mcpClient: McpClient = FakeMcpClient(),
+        pipelineSearchMcpClient: McpClient = mcpClient,
+        pipelineSummarizeMcpClient: McpClient = mcpClient,
+        pipelineSaveMcpClient: McpClient = mcpClient,
     ): AgentChatViewModel =
         AgentChatViewModel(
             llmAgent = fakeAgent,
@@ -1198,6 +1217,9 @@ class AgentChatViewModelTest {
             userProfileStore = userProfileStore,
             invariantStore = invariantStore,
             mcpClient = mcpClient,
+            pipelineSearchMcpClient = pipelineSearchMcpClient,
+            pipelineSummarizeMcpClient = pipelineSummarizeMcpClient,
+            pipelineSaveMcpClient = pipelineSaveMcpClient,
         )
 
     private class FakeLlmAgent(

@@ -26,6 +26,9 @@ import javax.inject.Named
 
 const val MCP_FETCH_SERVER_URL_NAME = "McpFetchServerUrl"
 const val MCP_SERVER_URL_NAME = MCP_FETCH_SERVER_URL_NAME
+const val MCP_SEARCH_SERVER_URL_NAME = "McpSearchServerUrl"
+const val MCP_SUMMARIZE_SERVER_URL_NAME = "McpSummarizeServerUrl"
+const val MCP_SAVE_SERVER_URL_NAME = "McpSaveServerUrl"
 
 const val MCP_PROTOCOL_VERSION = "2025-06-18"
 

@@ -11,6 +11,9 @@ import com.akhavanskii.aichallenge.core.network.McpNetworkError
 import com.akhavanskii.aichallenge.core.network.McpToolCall
 import com.akhavanskii.aichallenge.core.network.McpToolCallResult
 import com.akhavanskii.aichallenge.core.network.McpToolDiscovery
+import com.akhavanskii.aichallenge.core.network.PipelineSaveMcpClient
+import com.akhavanskii.aichallenge.core.network.PipelineSearchMcpClient
+import com.akhavanskii.aichallenge.core.network.PipelineSummarizeMcpClient
 import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -46,6 +49,9 @@ class AgentChatViewModel
         private val userProfileStore: AgentChatUserProfileStore,
         private val invariantStore: AgentChatInvariantStore,
         private val mcpClient: McpClient,
+        @param:PipelineSearchMcpClient private val pipelineSearchMcpClient: McpClient,
+        @param:PipelineSummarizeMcpClient private val pipelineSummarizeMcpClient: McpClient,
+        @param:PipelineSaveMcpClient private val pipelineSaveMcpClient: McpClient,
     ) : ViewModel() {
         private val mutableUiState = MutableStateFlow(AgentChatUiState())
         val uiState: StateFlow<AgentChatUiState> = mutableUiState.asStateFlow()
@@ -1002,6 +1008,7 @@ class AgentChatViewModel
                 val searchStep =
                     callMcpPipelineStep(
                         stepName = SEARCH_TOOL,
+                        client = pipelineSearchMcpClient,
                         arguments =
                             buildJsonObject {
                                 put("query", query)
@@ -1034,6 +1041,7 @@ class AgentChatViewModel
                 val summarizeStep =
                     callMcpPipelineStep(
                         stepName = SUMMARIZE_TOOL,
+                        client = pipelineSummarizeMcpClient,
                         arguments =
                             buildJsonObject {
                                 if (searchQuery != null) {
@@ -1067,6 +1075,7 @@ class AgentChatViewModel
                 val saveStep =
                     callMcpPipelineStep(
                         stepName = SAVE_TO_FILE_TOOL,
+                        client = pipelineSaveMcpClient,
                         arguments =
                             buildJsonObject {
                                 when {
@@ -1091,13 +1100,14 @@ class AgentChatViewModel
 
         private suspend fun callMcpPipelineStep(
             stepName: String,
+            client: McpClient,
             arguments: JsonObject,
         ): McpPipelineStepResult =
-            when (val result = mcpClient.callTool(name = stepName, arguments = arguments)) {
+            when (val result = client.callTool(name = stepName, arguments = arguments)) {
                 is McpToolCallResult.Failure ->
                     McpPipelineStepResult.Failure(
                         stepName = stepName,
-                        message = result.error.toMcpPipelineMessage(),
+                        message = result.error.toMcpPipelineMessage(stepName),
                     )
                 is McpToolCallResult.Success ->
                     if (result.value.isError) {
@@ -1690,16 +1700,21 @@ class AgentChatViewModel
             }
         }
 
-        private fun McpNetworkError.toMcpPipelineMessage(): String {
+        private fun McpNetworkError.toMcpPipelineMessage(stepName: String): String {
             val message = userMessage
             return if (message.contains("Unknown tool", ignoreCase = true)) {
                 """
                 $message
 
-                Start `rtk ./gradlew :mcp:pipeline-server:run` or set `MCP_SERVER_URL` to the pipeline server.
+                Check the `$stepName` server URL and tool. Start all 3 servers:
+                `rtk ./gradlew :mcp:pipeline-search-server:run`
+                `rtk ./gradlew :mcp:pipeline-summarize-server:run`
+                `rtk ./gradlew :mcp:pipeline-save-server:run`
+
+                Or set `MCP_SEARCH_SERVER_URL`, `MCP_SUMMARIZE_SERVER_URL`, and `MCP_SAVE_SERVER_URL`.
                 """.trimIndent()
             } else {
-                message
+                "MCP `$stepName` server failed: $message"
             }
         }
 

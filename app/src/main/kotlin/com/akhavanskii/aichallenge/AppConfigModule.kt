@@ -3,7 +3,10 @@ package com.akhavanskii.aichallenge
 import com.akhavanskii.aichallenge.core.network.DEEPSEEK_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.GEMINI_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.HUGGINGFACE_API_KEY_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_SAVE_SERVER_URL_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_SEARCH_SERVER_URL_NAME
 import com.akhavanskii.aichallenge.core.network.MCP_SERVER_URL_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_SUMMARIZE_SERVER_URL_NAME
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -29,6 +32,18 @@ object AppConfigModule {
     @Provides
     @Named(MCP_SERVER_URL_NAME)
     fun provideMcpServerUrl(): String = BuildConfig.MCP_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_SEARCH_SERVER_URL_NAME)
+    fun provideMcpSearchServerUrl(): String = BuildConfig.MCP_SEARCH_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_SUMMARIZE_SERVER_URL_NAME)
+    fun provideMcpSummarizeServerUrl(): String = BuildConfig.MCP_SUMMARIZE_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_SAVE_SERVER_URL_NAME)
+    fun provideMcpSaveServerUrl(): String = BuildConfig.MCP_SAVE_SERVER_URL.toAndroidMcpServerUrl()
 }
 
 internal fun String.toAndroidMcpServerUrl(): String {
@@ -55,3 +70,6 @@ internal fun String.toAndroidMcpServerUrl(): String {
 
 private const val ANDROID_EMULATOR_HOST_LOOPBACK = "10.0.2.2"
 internal const val DEFAULT_ANDROID_MCP_SERVER_URL = "http://10.0.2.2:8765/mcp"
+internal const val DEFAULT_ANDROID_MCP_SEARCH_SERVER_URL = "http://10.0.2.2:8766/mcp"
+internal const val DEFAULT_ANDROID_MCP_SUMMARIZE_SERVER_URL = "http://10.0.2.2:8767/mcp"
+internal const val DEFAULT_ANDROID_MCP_SAVE_SERVER_URL = "http://10.0.2.2:8768/mcp"
