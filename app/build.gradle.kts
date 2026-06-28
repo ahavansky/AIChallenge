@@ -113,6 +113,30 @@ android {
             .get()
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
+    val mcpDevProjectServerUrl =
+        providers
+            .gradleProperty("MCP_DEV_PROJECT_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_DEV_PROJECT_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_DEV_PROJECT_SERVER_URL") ?: "http://10.0.2.2:8771/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+    val mcpDevBuildServerUrl =
+        providers
+            .gradleProperty("MCP_DEV_BUILD_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_DEV_BUILD_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_DEV_BUILD_SERVER_URL") ?: "http://10.0.2.2:8772/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+    val mcpDevDeviceServerUrl =
+        providers
+            .gradleProperty("MCP_DEV_DEVICE_SERVER_URL")
+            .orElse(providers.environmentVariable("MCP_DEV_DEVICE_SERVER_URL"))
+            .orElse(localProperties.getProperty("MCP_DEV_DEVICE_SERVER_URL") ?: "http://10.0.2.2:8773/mcp")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
 
     defaultConfig {
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
@@ -122,6 +146,9 @@ android {
         buildConfigField("String", "MCP_SEARCH_SERVER_URL", "\"$mcpSearchServerUrl\"")
         buildConfigField("String", "MCP_SUMMARIZE_SERVER_URL", "\"$mcpSummarizeServerUrl\"")
         buildConfigField("String", "MCP_SAVE_SERVER_URL", "\"$mcpSaveServerUrl\"")
+        buildConfigField("String", "MCP_DEV_PROJECT_SERVER_URL", "\"$mcpDevProjectServerUrl\"")
+        buildConfigField("String", "MCP_DEV_BUILD_SERVER_URL", "\"$mcpDevBuildServerUrl\"")
+        buildConfigField("String", "MCP_DEV_DEVICE_SERVER_URL", "\"$mcpDevDeviceServerUrl\"")
     }
 
     packaging {

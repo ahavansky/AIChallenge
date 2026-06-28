@@ -18,6 +18,7 @@ data class AgentChatUiState(
     val compareResults: List<AgentChatProfileCompareResult> = emptyList(),
     val liveBriefing: AgentChatLiveBriefingUiState = AgentChatLiveBriefingUiState(),
     val mcpPipeline: AgentChatMcpPipelineUiState = AgentChatMcpPipelineUiState(),
+    val mcpDevAgent: AgentChatMcpDevAgentUiState = AgentChatMcpDevAgentUiState(),
     val isLongTermMemoryDirty: Boolean = false,
     val isInvariantsDirty: Boolean = false,
 ) : UiState {
@@ -28,6 +29,7 @@ data class AgentChatUiState(
                 liveBriefing.isLoading ||
                 liveBriefing.isWatching ||
                 mcpPipeline.isLoading ||
+                mcpDevAgent.isLoading ||
                 memory.taskState.status == AgentTaskStatus.RUNNING
 
     val canRunTask: Boolean
@@ -79,6 +81,9 @@ data class AgentChatUiState(
         get() = input.isNotBlank() && !isLoading
 
     val canRunMcpPipeline: Boolean
+        get() = input.isNotBlank() && !isLoading
+
+    val canRunMcpAgent: Boolean
         get() = input.isNotBlank() && !isLoading
 
     val canWatchLiveBriefingMcp: Boolean
@@ -143,6 +148,36 @@ data class AgentChatMcpPipelineUiState(
     val summarizeStatus: String = "",
     val saveToFileStatus: String = "",
 )
+
+data class AgentChatMcpDevAgentUiState(
+    val isVisible: Boolean = false,
+    val isLoading: Boolean = false,
+    val isError: Boolean = false,
+    val prompt: String = "",
+    val finalAnswer: String = "",
+    val errorMessage: String = "",
+    val steps: List<AgentChatMcpDevTraceStep> = emptyList(),
+)
+
+data class AgentChatMcpDevTraceStep(
+    val step: Int,
+    val server: String,
+    val tool: String,
+    val reason: String,
+    val argsSummary: String,
+    val status: AgentChatMcpDevTraceStatus,
+    val resultSnippet: String = "",
+    val artifact: String = "",
+)
+
+enum class AgentChatMcpDevTraceStatus(
+    val title: String,
+) {
+    RUNNING("running"),
+    OK("ok"),
+    FAILED("failed"),
+    REJECTED("rejected"),
+}
 
 enum class AgentChatModelOption(
     val modelName: String,
@@ -311,6 +346,8 @@ sealed interface AgentChatAction : UiEvent {
     data object CallGitHubRepositoryTool : AgentChatAction
 
     data object RunMcpPipeline : AgentChatAction
+
+    data object RunMcpAgent : AgentChatAction
 
     data object WatchLiveBriefingMcp : AgentChatAction
 

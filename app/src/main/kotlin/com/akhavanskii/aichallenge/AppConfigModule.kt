@@ -3,6 +3,9 @@ package com.akhavanskii.aichallenge
 import com.akhavanskii.aichallenge.core.network.DEEPSEEK_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.GEMINI_API_KEY_NAME
 import com.akhavanskii.aichallenge.core.network.HUGGINGFACE_API_KEY_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_DEV_BUILD_SERVER_URL_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_DEV_DEVICE_SERVER_URL_NAME
+import com.akhavanskii.aichallenge.core.network.MCP_DEV_PROJECT_SERVER_URL_NAME
 import com.akhavanskii.aichallenge.core.network.MCP_SAVE_SERVER_URL_NAME
 import com.akhavanskii.aichallenge.core.network.MCP_SEARCH_SERVER_URL_NAME
 import com.akhavanskii.aichallenge.core.network.MCP_SERVER_URL_NAME
@@ -44,6 +47,18 @@ object AppConfigModule {
     @Provides
     @Named(MCP_SAVE_SERVER_URL_NAME)
     fun provideMcpSaveServerUrl(): String = BuildConfig.MCP_SAVE_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_DEV_PROJECT_SERVER_URL_NAME)
+    fun provideMcpDevProjectServerUrl(): String = BuildConfig.MCP_DEV_PROJECT_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_DEV_BUILD_SERVER_URL_NAME)
+    fun provideMcpDevBuildServerUrl(): String = BuildConfig.MCP_DEV_BUILD_SERVER_URL.toAndroidMcpServerUrl()
+
+    @Provides
+    @Named(MCP_DEV_DEVICE_SERVER_URL_NAME)
+    fun provideMcpDevDeviceServerUrl(): String = BuildConfig.MCP_DEV_DEVICE_SERVER_URL.toAndroidMcpServerUrl()
 }
 
 internal fun String.toAndroidMcpServerUrl(): String {
@@ -73,3 +88,6 @@ internal const val DEFAULT_ANDROID_MCP_SERVER_URL = "http://10.0.2.2:8765/mcp"
 internal const val DEFAULT_ANDROID_MCP_SEARCH_SERVER_URL = "http://10.0.2.2:8766/mcp"
 internal const val DEFAULT_ANDROID_MCP_SUMMARIZE_SERVER_URL = "http://10.0.2.2:8767/mcp"
 internal const val DEFAULT_ANDROID_MCP_SAVE_SERVER_URL = "http://10.0.2.2:8768/mcp"
+internal const val DEFAULT_ANDROID_MCP_DEV_PROJECT_SERVER_URL = "http://10.0.2.2:8771/mcp"
+internal const val DEFAULT_ANDROID_MCP_DEV_BUILD_SERVER_URL = "http://10.0.2.2:8772/mcp"
+internal const val DEFAULT_ANDROID_MCP_DEV_DEVICE_SERVER_URL = "http://10.0.2.2:8773/mcp"

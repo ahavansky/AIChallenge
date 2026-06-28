@@ -36,6 +36,18 @@ annotation class PipelineSummarizeMcpClient
 @Retention(AnnotationRetention.BINARY)
 annotation class PipelineSaveMcpClient
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class DevProjectMcpClient
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class DevBuildMcpClient
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class DevDeviceMcpClient
+
 @Module
 @InstallIn(SingletonComponent::class)
 interface NetworkBindings {
@@ -147,6 +159,54 @@ object NetworkModule {
     @PipelineSaveMcpClient
     fun providePipelineSaveMcpClient(
         @Named(MCP_SAVE_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
+
+    @Provides
+    @Singleton
+    @DevProjectMcpClient
+    fun provideDevProjectMcpClient(
+        @Named(MCP_DEV_PROJECT_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
+
+    @Provides
+    @Singleton
+    @DevBuildMcpClient
+    fun provideDevBuildMcpClient(
+        @Named(MCP_DEV_BUILD_SERVER_URL_NAME) serverUrl: String,
+        callFactory: Call.Factory,
+        json: Json,
+        @NetworkDispatcher dispatcher: CoroutineDispatcher,
+    ): McpClient =
+        RestMcpClient(
+            serverUrl = serverUrl,
+            callFactory = callFactory,
+            json = json,
+            dispatcher = dispatcher,
+        )
+
+    @Provides
+    @Singleton
+    @DevDeviceMcpClient
+    fun provideDevDeviceMcpClient(
+        @Named(MCP_DEV_DEVICE_SERVER_URL_NAME) serverUrl: String,
         callFactory: Call.Factory,
         json: Json,
         @NetworkDispatcher dispatcher: CoroutineDispatcher,

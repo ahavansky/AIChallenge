@@ -179,6 +179,11 @@ fun AgentChatScreen(
                 pipeline = state.mcpPipeline,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            McpDevAgentTracePanel(
+                agent = state.mcpDevAgent,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         if (!shouldHideComposer) {
@@ -225,6 +230,13 @@ fun AgentChatScreen(
                     modifier = Modifier.testTag(AgentChatTags.LIVE_BRIEFING_WATCH_BUTTON),
                 ) {
                     Text("Watch Live Briefing MCP")
+                }
+                TextButton(
+                    onClick = { onAction(AgentChatAction.RunMcpAgent) },
+                    enabled = state.canRunMcpAgent,
+                    modifier = Modifier.testTag(AgentChatTags.MCP_DEV_AGENT_BUTTON),
+                ) {
+                    Text("Run MCP Agent")
                 }
                 TextButton(
                     onClick = { onAction(AgentChatAction.RunMcpPipeline) },
@@ -1610,6 +1622,116 @@ private fun McpPipelineStatusChip(
 }
 
 @Composable
+private fun McpDevAgentTracePanel(
+    agent: AgentChatMcpDevAgentUiState,
+    modifier: Modifier = Modifier,
+) {
+    if (!agent.isVisible) return
+
+    Surface(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .testTag(AgentChatTags.MCP_DEV_AGENT_CARD),
+        shape = RoundedCornerShape(8.dp),
+        color = if (agent.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "MCP Agent Trace",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                McpPipelineStatusChip(
+                    status =
+                        when {
+                            agent.isLoading -> "running"
+                            agent.isError -> "failed"
+                            else -> "done"
+                        },
+                    isError = agent.isError,
+                )
+            }
+
+            if (agent.prompt.isNotBlank()) {
+                Text(
+                    text = "Prompt: ${agent.prompt}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            agent.steps.forEach { step ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            McpPipelineStatusChip(status = "#${step.step}")
+                            McpPipelineStatusChip(status = step.server)
+                            McpPipelineStatusChip(status = step.tool)
+                            McpPipelineStatusChip(
+                                status = step.status.title,
+                                isError =
+                                    step.status == AgentChatMcpDevTraceStatus.FAILED ||
+                                        step.status == AgentChatMcpDevTraceStatus.REJECTED,
+                            )
+                        }
+                        if (step.reason.isNotBlank()) {
+                            FileMetadataLine(label = "Reason", value = step.reason)
+                        }
+                        FileMetadataLine(label = "Args", value = step.argsSummary)
+                        if (step.artifact.isNotBlank()) {
+                            FileMetadataLine(label = "Artifact", value = step.artifact)
+                        }
+                        if (step.resultSnippet.isNotBlank()) {
+                            Text(
+                                text = step.resultSnippet,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (agent.errorMessage.isNotBlank()) {
+                Text(
+                    text = agent.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            } else if (agent.finalAnswer.isNotBlank()) {
+                ChallengeMarkdownBody(
+                    body = agent.finalAnswer,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun FileMetadataLine(
     label: String,
     value: String,
@@ -1890,6 +2012,8 @@ object AgentChatTags {
     const val MODEL_PREFIX = "agent_chat_model"
     const val RUN_TASK_BUTTON = "agent_chat_run_task_button"
     const val GITHUB_MCP_BUTTON = "agent_chat_github_mcp_button"
+    const val MCP_DEV_AGENT_BUTTON = "agent_chat_mcp_dev_agent_button"
+    const val MCP_DEV_AGENT_CARD = "agent_chat_mcp_dev_agent_card"
     const val MCP_PIPELINE_BUTTON = "agent_chat_mcp_pipeline_button"
     const val MCP_PIPELINE_CARD = "agent_chat_mcp_pipeline_card"
     const val LIVE_BRIEFING_WATCH_BUTTON = "agent_chat_live_briefing_watch_button"

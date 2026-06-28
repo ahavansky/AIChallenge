@@ -21,6 +21,8 @@ Modules:
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
 - `:mcp:github-server` - Standalone JVM MCP HTTP server that exposes a read-only GitHub repository summary tool backed by the live GitHub REST API.
+- `:mcp:dev-common` - Neutral JSON-RPC HTTP MCP scaffold, safe process runner, output cap/redaction helpers, and project path validation for local Android QA tools.
+- `:mcp:dev-project-server`, `:mcp:dev-build-server`, `:mcp:dev-device-server` - three standalone JVM MCP HTTP servers for local Android QA: project snapshot/search, allowlisted Gradle checks/test failure parsing, and adb/layout/logcat diagnostics.
 - `:mcp:live-briefing-server` - Standalone JVM MCP HTTP server that periodically refreshes a live user briefing from Open-Meteo weather, allowlisted RSS feeds, and local reminders persisted in JSON.
 - `:mcp:pipeline-search-server`, `:mcp:pipeline-summarize-server`, `:mcp:pipeline-save-server` - three standalone JVM MCP HTTP servers for the demo pipeline: live Wikipedia search, deterministic summary, and host-side Markdown file save.
 
@@ -116,6 +118,37 @@ MCP_PIPELINE_OUTPUT_DIR=/absolute/path/output
 
 The pipeline servers default to ports `8766`, `8767`, and `8768`, so they can coexist with the older GitHub and Live Briefing examples that usually use `8765`. In Agent Chat, enter a query and tap `Run MCP Pipeline`; the app calls `search -> summarize -> saveToFile` across the three servers, passes parsed `structuredContent` between calls, and shows a saved-file preview card with the step trace, file name, host path, byte size, source count, and rendered Markdown content. If the app reports an unknown MCP tool, verify that all three servers are running and set `MCP_SEARCH_SERVER_URL`, `MCP_SUMMARIZE_SERVER_URL`, and `MCP_SAVE_SERVER_URL` to the matching endpoints.
 
+For developer Android QA, Agent Chat can run an LLM-planned multi-server MCP agent across three local servers:
+
+```bash
+rtk ./gradlew :mcp:dev-project-server:installDist :mcp:dev-build-server:installDist :mcp:dev-device-server:installDist
+rtk mcp/dev-project-server/build/install/dev-project-server/bin/dev-project-server
+rtk mcp/dev-build-server/build/install/dev-build-server/bin/dev-build-server
+rtk mcp/dev-device-server/build/install/dev-device-server/bin/dev-device-server
+```
+
+The Build server should be started from the installed distribution script, not from nested Gradle `run`, because its `run_check` tool starts fixed Gradle commands and should not contend with the Gradle invocation that launched the server.
+
+The servers expose:
+
+- `dev-project/project_snapshot` and `dev-project/code_search` on port `8771`.
+- `dev-build/run_check` and `dev-build/test_failures` on port `8772`.
+- `dev-device/device_status`, `dev-device/ui_snapshot`, and `dev-device/logcat_excerpt` on port `8773`.
+
+```properties
+MCP_DEV_PROJECT_SERVER_URL=http://10.0.2.2:8771/mcp
+MCP_DEV_BUILD_SERVER_URL=http://10.0.2.2:8772/mcp
+MCP_DEV_DEVICE_SERVER_URL=http://10.0.2.2:8773/mcp
+MCP_DEV_PROJECT_SERVER_PORT=8771
+MCP_DEV_BUILD_SERVER_PORT=8772
+MCP_DEV_DEVICE_SERVER_PORT=8773
+MCP_DEV_PROJECT_ROOT=/absolute/path/to/aichallenge
+```
+
+In Agent Chat, enter `Проверь Agent Chat экран и найди, почему QA падает.` and tap `Run MCP Agent`. The app discovers `tools/list` from all three servers, asks the selected LLM for one strict JSON decision per step, validates `tool_id` and arguments locally, routes to the matching `McpClient`, and renders a trace card with step, server, tool, reason, argument summary, status, result snippet, and artifact path. Tool output is sent back to the planner only as untrusted data.
+
+Developer MCP tools do not accept arbitrary shell commands and never write source files. `run_check` accepts only `agent_chat_unit`, `network_unit`, `mcp_dev_servers`, `app_debug`, or `quality_gate`; process output is capped to 32 KB, redacted for secrets, and full redacted artifacts are saved under `build/mcp-dev-qa` when needed.
+
 ## Gemini Parameter Comparison
 
 The home screen exposes Gemini `generationConfig` controls for `responseMimeType`, `responseSchema`, `maxOutputTokens`, `stopSequences`, `temperature`, `topP`, `topK`, `candidateCount`, `presencePenalty`, and `frequencyPenalty`. Numeric controls use sliders; each control includes a detailed UI explanation with boundary values:
@@ -154,6 +187,8 @@ Agent Chat has a compact header model selector. The selected model is saved in `
 `Run task` is the main Agent Chat submit path and starts a formal pipeline owned by app code: `planning -> execution -> validation -> done`. Each stage begins with five parallel specialist branches for intent, constraints, context, solution strategy, and review; an orchestrator step then synthesizes the specialist artifacts into the stage artifact. The app gates transitions in code: execution cannot start until the user approves the task spec, finalization cannot start until validation reports `PASS` and the user accepts it, and invalid jumps are rejected with local errors. Plan revision returns to planning, execution revision returns to execution, and validation outcomes are stored explicitly as `PASS`, `NEEDS_REVISION`, `BLOCKED`, or `UNKNOWN`. The task can be paused on any running step, persisted, and continued later without replaying completed artifacts; branch retry reruns only failed specialist branches. If the app restores a task that was running during process death, it reopens it as paused. Before each request, the prompt builder applies instruction priority rules, adds the active profile to the system instruction, includes invariants before formal task state and editable `TaskContext`, applies simple budget limits, appends selected memory layers, and finally sends the current user task, branch prompt, or pipeline step prompt. Hard invariant conflicts in user requests are refused locally before Gemini is called. Model outputs are checked before they are stored as typed artifacts; a hard invariant violation gets one repair request, and a repeated violation fails the current task step. The screen shows the current stage, step, branch status, waiting reason, validation outcome, derived expected action, saved artifacts, concrete context contents by source, and which sources were used by the last request. Loading and error messages are shown in the chat, but they are not sent back as model context.
 
 `Use GitHub MCP` is a local Agent Chat action. Enter a repository as `owner/repo`, for example `square/okhttp`; the app calls MCP `tools/call` for `github_repository_summary`, receives live GitHub metadata, then sends that tool result to the selected LLM as untrusted external data. The final chat message shows both the MCP tool result and the agent answer derived from it. The existing MCP client still supports `tools/list` discovery for diagnostics.
+
+`Run MCP Agent` is the local Android QA agent action. It discovers the dev Project, Build, and Device MCP tools, lets the selected LLM choose the next tool through a strict JSON planner, rejects unknown tools/arguments locally, limits each run to 8 tool calls, and shows a trace card for the full cross-server flow.
 
 ## Context Agent
 

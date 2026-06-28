@@ -29,6 +29,9 @@ const val MCP_SERVER_URL_NAME = MCP_FETCH_SERVER_URL_NAME
 const val MCP_SEARCH_SERVER_URL_NAME = "McpSearchServerUrl"
 const val MCP_SUMMARIZE_SERVER_URL_NAME = "McpSummarizeServerUrl"
 const val MCP_SAVE_SERVER_URL_NAME = "McpSaveServerUrl"
+const val MCP_DEV_PROJECT_SERVER_URL_NAME = "McpDevProjectServerUrl"
+const val MCP_DEV_BUILD_SERVER_URL_NAME = "McpDevBuildServerUrl"
+const val MCP_DEV_DEVICE_SERVER_URL_NAME = "McpDevDeviceServerUrl"
 
 const val MCP_PROTOCOL_VERSION = "2025-06-18"
 

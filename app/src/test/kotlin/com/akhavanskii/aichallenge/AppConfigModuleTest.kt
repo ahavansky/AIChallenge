@@ -12,6 +12,13 @@ class AppConfigModuleTest {
     }
 
     @Test
+    fun devMcpServerDefaultsUseThreeSeparatePorts() {
+        assertEquals("http://10.0.2.2:8771/mcp", DEFAULT_ANDROID_MCP_DEV_PROJECT_SERVER_URL)
+        assertEquals("http://10.0.2.2:8772/mcp", DEFAULT_ANDROID_MCP_DEV_BUILD_SERVER_URL)
+        assertEquals("http://10.0.2.2:8773/mcp", DEFAULT_ANDROID_MCP_DEV_DEVICE_SERVER_URL)
+    }
+
+    @Test
     fun blankMcpServerUrlFallsBackToAndroidEmulatorHostLoopback() {
         assertEquals(
             DEFAULT_ANDROID_MCP_SERVER_URL,

@@ -18,6 +18,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -1209,6 +1210,14 @@ class AgentChatViewModelTest {
         pipelineSearchMcpClient: McpClient = mcpClient,
         pipelineSummarizeMcpClient: McpClient = mcpClient,
         pipelineSaveMcpClient: McpClient = mcpClient,
+        mcpDevAgent: AgentChatMcpDevAgent =
+            AgentChatMcpDevAgent(
+                llmAgent = fakeAgent,
+                projectClient = mcpClient,
+                buildClient = mcpClient,
+                deviceClient = mcpClient,
+                json = Json { ignoreUnknownKeys = true },
+            ),
     ): AgentChatViewModel =
         AgentChatViewModel(
             llmAgent = fakeAgent,
@@ -1217,6 +1226,7 @@ class AgentChatViewModelTest {
             userProfileStore = userProfileStore,
             invariantStore = invariantStore,
             mcpClient = mcpClient,
+            mcpDevAgent = mcpDevAgent,
             pipelineSearchMcpClient = pipelineSearchMcpClient,
             pipelineSummarizeMcpClient = pipelineSummarizeMcpClient,
             pipelineSaveMcpClient = pipelineSaveMcpClient,

@@ -49,6 +49,7 @@ class AgentChatViewModel
         private val userProfileStore: AgentChatUserProfileStore,
         private val invariantStore: AgentChatInvariantStore,
         private val mcpClient: McpClient,
+        private val mcpDevAgent: AgentChatMcpDevAgent,
         @param:PipelineSearchMcpClient private val pipelineSearchMcpClient: McpClient,
         @param:PipelineSummarizeMcpClient private val pipelineSummarizeMcpClient: McpClient,
         @param:PipelineSaveMcpClient private val pipelineSaveMcpClient: McpClient,
@@ -104,6 +105,7 @@ class AgentChatViewModel
                 AgentChatAction.ClearTaskContext -> clearTaskContext()
                 AgentChatAction.CompareProfiles -> compareProfiles()
                 AgentChatAction.CallGitHubRepositoryTool -> callGitHubRepositoryTool()
+                AgentChatAction.RunMcpAgent -> runMcpAgent()
                 AgentChatAction.RunMcpPipeline -> runMcpPipeline()
                 AgentChatAction.AddLiveBriefingDemoReminder -> addLiveBriefingDemoReminder()
                 AgentChatAction.ListFetchTools -> listFetchTools()
@@ -1098,6 +1100,73 @@ class AgentChatViewModel
             }
         }
 
+        private fun runMcpAgent() {
+            val currentState = mutableUiState.value
+            if (!currentState.canRunMcpAgent) return
+
+            val prompt = currentState.input.normalizedPromptOrNull()
+            if (prompt == null) {
+                appendLocalError("Enter a QA prompt before running MCP Agent.")
+                return
+            }
+            val updatedState =
+                mutableUiState.updateAndGet { current ->
+                    current.copy(
+                        input = "",
+                        messages =
+                            current.messages +
+                                AgentChatMessage(role = AgentChatRole.USER, text = prompt) +
+                                AgentChatMessage(
+                                    role = AgentChatRole.MODEL,
+                                    text = "Running MCP Agent...",
+                                    isLoading = true,
+                                ),
+                        compareResults = emptyList(),
+                        mcpDevAgent =
+                            AgentChatMcpDevAgentUiState(
+                                isVisible = true,
+                                isLoading = true,
+                                prompt = prompt,
+                            ),
+                    )
+                }
+            persistHistory(updatedState)
+
+            launchActiveRequest { requestId ->
+                val result =
+                    mcpDevAgent.run(
+                        prompt = prompt,
+                        model = currentState.selectedModel,
+                    ) { traceStep ->
+                        if (isCurrentRequest(requestId)) {
+                            upsertMcpDevTraceStep(traceStep)
+                        }
+                    }
+                if (!isCurrentRequest(requestId)) return@launchActiveRequest
+
+                mutableUiState.update { current ->
+                    current.copy(
+                        mcpDevAgent =
+                            current.mcpDevAgent.copy(
+                                isLoading = false,
+                                isError = result.isError,
+                                finalAnswer = result.finalAnswer,
+                                errorMessage = result.errorMessage,
+                            ),
+                    )
+                }
+                replaceLoadingMessage(
+                    text =
+                        if (result.isError) {
+                            "MCP Agent failed. See trace below."
+                        } else {
+                            result.finalAnswer.ifBlank { "MCP Agent completed. See trace below." }
+                        },
+                    isError = result.isError,
+                )
+            }
+        }
+
         private suspend fun callMcpPipelineStep(
             stepName: String,
             client: McpClient,
@@ -1431,6 +1500,17 @@ class AgentChatViewModel
                                             current.mcpPipeline.errorMessage
                                         },
                                 ),
+                            mcpDevAgent =
+                                current.mcpDevAgent.copy(
+                                    isLoading = false,
+                                    isError = current.mcpDevAgent.isLoading,
+                                    errorMessage =
+                                        if (current.mcpDevAgent.isLoading) {
+                                            "Stopped by user."
+                                        } else {
+                                            current.mcpDevAgent.errorMessage
+                                        },
+                                ),
                         )
                     stoppedState
                 }
@@ -1696,6 +1776,24 @@ class AgentChatViewModel
                         } else {
                             saveToFileStatus.ifBlank { MCP_PIPELINE_STATUS_PENDING }
                         },
+                )
+            }
+        }
+
+        private fun upsertMcpDevTraceStep(traceStep: AgentChatMcpDevTraceStep) {
+            mutableUiState.update { current ->
+                val nextSteps =
+                    if (current.mcpDevAgent.steps.any { it.step == traceStep.step }) {
+                        current.mcpDevAgent.steps.map { if (it.step == traceStep.step) traceStep else it }
+                    } else {
+                        current.mcpDevAgent.steps + traceStep
+                    }
+                current.copy(
+                    mcpDevAgent =
+                        current.mcpDevAgent.copy(
+                            isVisible = true,
+                            steps = nextSteps,
+                        ),
                 )
             }
         }
