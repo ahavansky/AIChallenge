@@ -170,6 +170,7 @@ dependencies {
     implementation(project(":feature:home"))
     implementation(project(":feature:huggingface-lab"))
     implementation(project(":feature:prompt-lab"))
+    implementation(project(":feature:rag-indexing"))
     implementation(project(":feature:temperature-lab"))
 
     val composeBom = platform(libs.androidx.compose.bom)

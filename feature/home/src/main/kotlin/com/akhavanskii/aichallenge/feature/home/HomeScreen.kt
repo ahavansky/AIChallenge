@@ -55,6 +55,7 @@ fun HomeScreen(
     onOpenPromptLab: () -> Unit = {},
     onOpenTemperatureLab: () -> Unit = {},
     onOpenHuggingFaceLab: () -> Unit = {},
+    onOpenRagIndexing: () -> Unit = {},
 ) {
     BoxWithConstraints(
         modifier =
@@ -82,6 +83,7 @@ fun HomeScreen(
                     onOpenPromptLab = onOpenPromptLab,
                     onOpenTemperatureLab = onOpenTemperatureLab,
                     onOpenHuggingFaceLab = onOpenHuggingFaceLab,
+                    onOpenRagIndexing = onOpenRagIndexing,
                     modifier = Modifier.weight(0.95f),
                 )
                 ResultSection(
@@ -102,6 +104,7 @@ fun HomeScreen(
                     onOpenPromptLab = onOpenPromptLab,
                     onOpenTemperatureLab = onOpenTemperatureLab,
                     onOpenHuggingFaceLab = onOpenHuggingFaceLab,
+                    onOpenRagIndexing = onOpenRagIndexing,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 ResultSection(
@@ -123,6 +126,7 @@ private fun PromptSection(
     onOpenPromptLab: () -> Unit,
     onOpenTemperatureLab: () -> Unit,
     onOpenHuggingFaceLab: () -> Unit,
+    onOpenRagIndexing: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -171,6 +175,12 @@ private fun PromptSection(
                     modifier = Modifier.testTag(HomeTags.PROMPT_LAB_BUTTON),
                 ) {
                     Text("Prompt Lab")
+                }
+                TextButton(
+                    onClick = onOpenRagIndexing,
+                    modifier = Modifier.testTag(HomeTags.RAG_INDEX_BUTTON),
+                ) {
+                    Text("RAG Index")
                 }
             }
         }
@@ -701,6 +711,7 @@ object HomeTags {
     const val PROMPT_LAB_BUTTON = "home_prompt_lab_button"
     const val TEMPERATURE_LAB_BUTTON = "home_temperature_lab_button"
     const val HUGGINGFACE_LAB_BUTTON = "home_huggingface_lab_button"
+    const val RAG_INDEX_BUTTON = "home_rag_index_button"
     const val SEND_BUTTON = "home_send_button"
     const val RESULT_AREA = "home_result_area"
     const val CONFIGURED_RESULT = "home_configured_result"

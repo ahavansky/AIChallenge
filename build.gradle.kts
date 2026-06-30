@@ -23,6 +23,7 @@ dependencies {
   kover(project(":feature:context-agent"))
   kover(project(":feature:huggingface-lab"))
   kover(project(":feature:prompt-lab"))
+  kover(project(":feature:rag-indexing"))
   kover(project(":feature:temperature-lab"))
 }
 

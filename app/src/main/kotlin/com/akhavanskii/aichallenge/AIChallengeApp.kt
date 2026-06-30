@@ -12,6 +12,7 @@ import com.akhavanskii.aichallenge.feature.contextagent.ContextAgentRoute
 import com.akhavanskii.aichallenge.feature.home.HomeRoute
 import com.akhavanskii.aichallenge.feature.huggingfacelab.HuggingFaceLabRoute
 import com.akhavanskii.aichallenge.feature.promptlab.PromptLabRoute
+import com.akhavanskii.aichallenge.feature.ragindexing.RagIndexingRoute
 import com.akhavanskii.aichallenge.feature.temperaturelab.TemperatureLabRoute
 import kotlinx.serialization.Serializable
 
@@ -32,6 +33,9 @@ data object TemperatureLabDestination : NavKey
 
 @Serializable
 data object HuggingFaceLabDestination : NavKey
+
+@Serializable
+data object RagIndexingDestination : NavKey
 
 @Composable
 fun AIChallengeApp(modifier: Modifier = Modifier) {
@@ -55,6 +59,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                             onOpenPromptLab = { backStack.add(PromptLabDestination) },
                             onOpenTemperatureLab = { backStack.add(TemperatureLabDestination) },
                             onOpenHuggingFaceLab = { backStack.add(HuggingFaceLabDestination) },
+                            onOpenRagIndexing = { backStack.add(RagIndexingDestination) },
                         )
                     }
                 AgentChatDestination ->
@@ -107,6 +112,16 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                             },
                         )
                     }
+                RagIndexingDestination ->
+                    NavEntry(key) {
+                        RagIndexingRoute(
+                            onBack = {
+                                if (backStack.size > 1) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
+                        )
+                    }
                 else ->
                     NavEntry(key) {
                         HomeRoute(
@@ -115,6 +130,7 @@ fun AIChallengeApp(modifier: Modifier = Modifier) {
                             onOpenPromptLab = {},
                             onOpenTemperatureLab = {},
                             onOpenHuggingFaceLab = {},
+                            onOpenRagIndexing = {},
                         )
                     }
             }

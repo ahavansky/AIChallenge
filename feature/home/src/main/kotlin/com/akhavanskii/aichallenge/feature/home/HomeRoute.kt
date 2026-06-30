@@ -12,6 +12,7 @@ fun HomeRoute(
     onOpenPromptLab: () -> Unit,
     onOpenTemperatureLab: () -> Unit,
     onOpenHuggingFaceLab: () -> Unit,
+    onOpenRagIndexing: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -23,5 +24,6 @@ fun HomeRoute(
         onOpenPromptLab = onOpenPromptLab,
         onOpenTemperatureLab = onOpenTemperatureLab,
         onOpenHuggingFaceLab = onOpenHuggingFaceLab,
+        onOpenRagIndexing = onOpenRagIndexing,
     )
 }

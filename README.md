@@ -18,6 +18,7 @@ Modules:
 - `:feature:context-agent` - Separate context-management strategy screen with Sliding Window, Sticky Facts, Branching, scenario comparison, JSON persistence, Compose UI, and tests.
 - `:feature:home` - Prompt input, Gemini parameter controls, side-by-side response comparison, Home ViewModel, Compose UI, UI tests, and screenshot tests.
 - `:feature:prompt-lab` - Four prompting-strategy comparison screen, ViewModel, UI state, Compose UI, and tests.
+- `:feature:rag-indexing` - RAG Indexing screen, ViewModel orchestration, Ollama embeddings client, Markdown corpus assets, fixed/structure chunking, JSON schema, embedding cache keys, cosine search primitives, and tests.
 - `:feature:temperature-lab` - Three-temperature comparison screen, ViewModel, UI state, Compose UI, and tests.
 - `:feature:huggingface-lab` - HuggingFace model benchmark screen, ViewModel, UI state, Compose UI, and tests.
 - `:mcp:github-server` - Standalone JVM MCP HTTP server that exposes a read-only GitHub repository summary tool backed by the live GitHub REST API.
@@ -74,7 +75,7 @@ rtk ./gradlew :mcp:github-server:run
 MCP_SERVER_URL=http://10.0.2.2:8765/mcp
 ```
 
-Do not use `http://localhost:8765/mcp` in the Android emulator config: inside the emulator, `localhost` points to the emulator itself, while `10.0.2.2` points to the host machine running the MCP server. For local emulator demos, the app normalizes `localhost` and `127.0.0.1` MCP URLs to `10.0.2.2` at runtime. The app permits cleartext HTTP only for local MCP development hosts (`10.0.2.2`, `10.0.3.2`, `127.0.0.1`, and `localhost`).
+Do not use `http://localhost:8765/mcp` in the Android emulator config: inside the emulator, `localhost` points to the emulator itself, while `10.0.2.2` points to the host machine running the MCP server. For local emulator demos, the app normalizes `localhost` and `127.0.0.1` MCP URLs to `10.0.2.2` at runtime. The release network security config permits cleartext HTTP only for local development hosts (`10.0.2.2`, `10.0.3.2`, `127.0.0.1`, and `localhost`); debug builds allow cleartext HTTP for local LAN QA, including physical-device Ollama testing.
 
 The MCP server exposes `github_repository_summary`, validates `owner` and `repo`, and calls the live GitHub REST API route `GET https://api.github.com/repos/{owner}/{repo}`. The optional `GITHUB_TOKEN` environment variable is read only by the server process to raise GitHub rate limits; the Android app does not receive this token. `MCP_FETCH_SERVER_URL` remains accepted as a legacy fallback.
 
@@ -255,6 +256,51 @@ Submitting a task sends three concurrent HuggingFace Router chat completion requ
 - Token usage from the provider response `usage`: `prompt_tokens`, `completion_tokens`, `total_tokens`, `visible_output_tokens`, and `reasoning_tokens` when the provider returns reasoning details.
 
 After all successful and failed HuggingFace results are collected, the selected Gemini evaluator model receives the answers and metrics. Gemini scores accuracy, instruction following, clarity, hallucination risk, speed, stability, and resource usage, then recommends the best model for the current task.
+
+## RAG Indexing Demo
+
+The `RAG Index` screen builds two local RAG indexes from bundled Markdown corpus assets, compares fixed-size chunking with structure-aware chunking on five demo queries, and searches the selected index with cosine ranking. The screen shows phase, progress, cached embedding reuse, output paths, index summaries, comparison stats/examples, and top-k search results.
+
+Corpus:
+
+- Location: `feature/rag-indexing/src/main/assets/rag`
+- Files: `README_snapshot_2026_06_29.md`, `rag_course_2026_06_29.md`
+- Current size: 2 Markdown files, 79 lines, 466 words, 3,384 bytes
+
+Ollama setup on the host machine:
+
+```bash
+ollama pull nomic-embed-text
+ollama serve
+```
+
+Use this endpoint in an Android emulator:
+
+```text
+http://10.0.2.2:11434/api/embed
+```
+
+Use this endpoint on a physical device, replacing the host IP with the LAN address of the machine running Ollama:
+
+```text
+http://<host-lan-ip>:11434/api/embed
+```
+
+The screen writes these files under Android `filesDir`:
+
+- `filesDir/rag-index/fixed/index.json`
+- `filesDir/rag-index/structure/index.json`
+- `filesDir/rag-index/cache/embeddings.json`
+- `filesDir/rag-index/comparison.json`
+- `filesDir/rag-index/comparison.md`
+
+Troubleshooting:
+
+- Ollama not reachable: verify `ollama serve` is running on the host, use `10.0.2.2` only for emulator, and use the host LAN IP for a physical device.
+- Model not pulled: run `ollama pull nomic-embed-text`, or change the model field to a pulled embedding model.
+- Timeout: first model load can be slow; retry after Ollama finishes loading, or check host CPU/RAM pressure.
+- Empty embeddings: confirm the endpoint is `/api/embed` and the selected model supports embeddings.
+- Android cleartext/local network: debug builds allow local HTTP for emulator and LAN QA. Release builds keep cleartext constrained; use HTTPS/proxy or add a specific network security rule for a release physical-device demo.
 
 ## Network Choice
 
