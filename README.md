@@ -259,13 +259,16 @@ After all successful and failed HuggingFace results are collected, the selected 
 
 ## RAG Indexing Demo
 
-The `RAG Index` screen builds two local RAG indexes from bundled Markdown corpus assets, compares fixed-size chunking with structure-aware chunking on five demo queries, and searches the selected index with cosine ranking. The screen shows phase, progress, cached embedding reuse, output paths, index summaries, comparison stats/examples, and top-k search results.
+The `RAG Index` screen builds two local RAG indexes from selected bundled Markdown corpus assets, compares fixed-size chunking with structure-aware chunking, searches the selected index with cosine ranking, and runs a two-mode RAG agent comparison. `Compare Modes` sends the user's question to the selected LLM once without RAG, then retrieves top-k chunks from the selected corpus, combines those chunks with the question, sends a RAG-grounded request to the same selected LLM, and asks that model to evaluate both answers against the editable expectation and expected source hints.
 
 Corpus:
 
 - Location: `feature/rag-indexing/src/main/assets/rag`
-- Files: `README_snapshot_2026_06_29.md`, `rag_course_2026_06_29.md`
-- Current size: 2 Markdown files, 79 lines, 466 words, 3,384 bytes
+- Files: `rag_course_2026_06_29.md`, `moby-dick.md`
+- Current size: 2 Markdown files, 22,521 lines, 221,952 words, 1,346,191 bytes
+- Default selection: `rag_course_2026_06_29.md` selected, `moby-dick.md` visible but unchecked so the large book is only indexed when deliberately selected.
+
+The user writes each control question manually in `Control question`. `Expected answer` and `Expected sources` are optional evaluator hints; they are used only by the quality comparison request, not by the no-RAG or RAG answer prompt.
 
 Ollama setup on the host machine:
 
@@ -294,12 +297,19 @@ The screen writes these files under Android `filesDir`:
 - `filesDir/rag-index/comparison.json`
 - `filesDir/rag-index/comparison.md`
 
+RAG agent requirements:
+
+- Embeddings: Ollama must be reachable at the selected endpoint.
+- Generation/evaluation: choose an LLM model on the screen. Gemini/Gemma options require `GEMINI_API_KEY`; DeepSeek options require `DEEPSEEK_API_KEY`. Both no-RAG/RAG answers and the quality comparison use the selected model through `LlmAgent`.
+- Index reuse: stored indexes are reused only when the selected embedding model and selected corpus source hash match.
+
 Troubleshooting:
 
 - Ollama not reachable: verify `ollama serve` is running on the host, use `10.0.2.2` only for emulator, and use the host LAN IP for a physical device.
 - Model not pulled: run `ollama pull nomic-embed-text`, or change the model field to a pulled embedding model.
 - Timeout: first model load can be slow; retry after Ollama finishes loading, or check host CPU/RAM pressure.
 - Empty embeddings: confirm the endpoint is `/api/embed` and the selected model supports embeddings.
+- Provider API key missing: add `GEMINI_API_KEY` for Gemini/Gemma models or `DEEPSEEK_API_KEY` for DeepSeek models through `local.properties`, Gradle property, or environment variable before running `Compare Modes`.
 - Android cleartext/local network: debug builds allow local HTTP for emulator and LAN QA. Release builds keep cleartext constrained; use HTTPS/proxy or add a specific network security rule for a release physical-device demo.
 
 ## Network Choice

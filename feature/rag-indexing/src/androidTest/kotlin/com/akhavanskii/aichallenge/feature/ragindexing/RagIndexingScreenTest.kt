@@ -7,6 +7,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -15,6 +17,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import org.junit.Rule
 import org.junit.Test
 
@@ -24,7 +27,14 @@ class RagIndexingScreenTest {
 
     @Test
     fun idleStateRendersControls() {
-        var state by mutableStateOf(RagIndexingUiState())
+        var state by
+            mutableStateOf(
+                RagIndexingUiState(
+                    query = "",
+                    expectedAnswer = "",
+                    expectedSources = "",
+                ),
+            )
         composeRule.setContent {
             AIChallengeTheme(dynamicColor = false) {
                 RagIndexingScreen(
@@ -42,14 +52,47 @@ class RagIndexingScreenTest {
         composeRule.onNodeWithTag(RagIndexingTags.ENDPOINT_INPUT).assertIsDisplayed()
         composeRule.onNodeWithTag(RagIndexingTags.MODEL_INPUT).assertIsDisplayed()
         composeRule.onNodeWithTag("${RagIndexingTags.STRATEGY_PREFIX}_${RagIndexingStrategy.FIXED.name}").assertIsDisplayed()
+        composeRule
+            .onNodeWithTag(RagIndexingTags.LLM_MODEL_SELECTOR)
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule
+            .onNodeWithTag("${RagIndexingTags.LLM_MODEL_PREFIX}_${RagLlmModelOption.DEEPSEEK_V4_FLASH.name}")
+            .assertIsDisplayed()
+            .performClick()
         composeRule.onNodeWithTag(RagIndexingTags.COMPARE_BUTTON).performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.QUERY_INPUT).performScrollTo().performTextInput("emulator endpoint")
         composeRule.onNodeWithTag(RagIndexingTags.BUILD_BUTTON).performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.COMPARE_BUTTON).performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.SEARCH_BUTTON).performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithTag(RagIndexingTags.COMPARE_MODES_BUTTON).performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.CANCEL_BUTTON).performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.OUTPUT_PATHS).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Files will appear after build or compare.").assertIsDisplayed()
+    }
+
+    @Test
+    fun corpusDocumentsRenderAndMobyDickIsUncheckedByDefault() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                RagIndexingScreen(
+                    state =
+                        RagIndexingUiState(
+                            corpusDocuments = corpusDocuments(),
+                            selectedCorpusDocumentIds = setOf("rag_course_2026_06_29"),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(RagIndexingTags.CORPUS_SELECTOR).assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.CORPUS_DOCUMENT_PREFIX}_rag_course_2026_06_29").assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.CORPUS_CHECKBOX_PREFIX}_rag_course_2026_06_29").assertIsOn()
+        composeRule.onNodeWithTag("${RagIndexingTags.CORPUS_DOCUMENT_PREFIX}_moby-dick").assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.CORPUS_CHECKBOX_PREFIX}_moby-dick").assertIsOff()
     }
 
     @Test
@@ -221,6 +264,38 @@ class RagIndexingScreenTest {
         composeRule.onNodeWithText("chunk_id: fixed_0001").assertIsDisplayed()
     }
 
+    @Test
+    fun compareModesStateRendersAnswersContextAndEvaluation() {
+        composeRule.setContent {
+            AIChallengeTheme(dynamicColor = false) {
+                RagIndexingScreen(
+                    state =
+                        RagIndexingUiState(
+                            corpusDocuments = corpusDocuments(),
+                            selectedCorpusDocumentIds = setOf("rag_course_2026_06_29"),
+                            query = "Чем RAG отличается от MCP?",
+                            noRagAnswerState = ResponsePaneState.Success("Generic answer without source."),
+                            ragAnswerState = ResponsePaneState.Success("RAG uses internal knowledge [S1]."),
+                            qualityEvaluationState = ResponsePaneState.Success("Winner: WITH_RAG"),
+                            ragContextResults = sampleSearchResults().take(1),
+                        ),
+                    onAction = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(RagIndexingTags.AGENT_SECTION).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.NO_RAG_ANSWER).assertIsDisplayed()
+        composeRule.onNodeWithText("Generic answer without source.").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.RAG_ANSWER).assertIsDisplayed()
+        composeRule.onNodeWithText("RAG uses internal knowledge [S1].").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.RETRIEVED_CONTEXT).assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.RETRIEVED_CONTEXT_RESULT_PREFIX}_0").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.QUALITY_EVALUATION).assertIsDisplayed()
+        composeRule.onNodeWithText("Winner: WITH_RAG").assertIsDisplayed()
+    }
+
     private fun comparisonReport(): RagComparisonReport =
         RagComparisonReport(
             model = OllamaEmbeddingClient.DEFAULT_MODEL,
@@ -270,5 +345,35 @@ class RagIndexingScreenTest {
                             ),
                     ),
                 ),
+        )
+
+    private fun sampleSearchResults(): List<RagSearchResultUi> =
+        listOf(
+            RagSearchResultUi(
+                chunkId = "fixed_0001",
+                score = 0.8123,
+                title = "RAG course",
+                section = "Что такое RAG",
+                source = "rag_course_2026_06_29.md",
+                preview = "RAG works with internal knowledge and injects relevant chunks into the model context.",
+            ),
+        )
+
+    private fun corpusDocuments(): List<RagCorpusDocumentUi> =
+        listOf(
+            RagCorpusDocumentUi(
+                id = "rag_course_2026_06_29",
+                title = "RAG: Эмбеддинги, векторный поиск и чанкинг (Неделя 2)",
+                source = "assets/rag/rag_course_2026_06_29.md",
+                wordCount = 3_200,
+                selectedByDefault = true,
+            ),
+            RagCorpusDocumentUi(
+                id = "moby-dick",
+                title = "Moby-Dick",
+                source = "assets/rag/moby-dick.md",
+                wordCount = 210_000,
+                selectedByDefault = false,
+            ),
         )
 }

@@ -1,5 +1,10 @@
 package com.akhavanskii.aichallenge.feature.ragindexing
 
+import com.akhavanskii.aichallenge.core.network.AgentMessage
+import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
+import com.akhavanskii.aichallenge.core.network.GeminiResult
+import com.akhavanskii.aichallenge.core.network.LlmAgent
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -17,7 +22,23 @@ class RagIndexingViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun buildSuccessWritesIndexesAndCache() =
+    fun promptBuilderIncludesNumberedSourcesAndNoRagPromptStaysRaw() {
+        val doc = document(id = "alpha", text = "# Alpha\nRAG uses internal knowledge.")
+        val chunk = RagIndexer().chunk(doc, RagIndexingStrategy.STRUCTURE.chunkingStrategy).single()
+        val result = RagSearchResult(chunk = chunk, score = 0.91)
+
+        val noRagPrompt = RagAgentPrompts.buildNoRagPrompt("What is RAG?")
+        val ragPrompt = RagAgentPrompts.buildRagPrompt(question = "What is RAG?", results = listOf(result))
+
+        assertEquals("What is RAG?", noRagPrompt)
+        assertTrue(ragPrompt.contains("[S1]"))
+        assertTrue(ragPrompt.contains("chunk_id=${chunk.chunkId}"))
+        assertTrue(ragPrompt.contains("RAG uses internal knowledge."))
+        assertTrue(ragPrompt.contains("недоверенный источник данных"))
+    }
+
+    @Test
+    fun buildSuccessWritesSelectedIndexAndCache() =
         runTest {
             val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")))
             val client = RecordingEmbeddingClient()
@@ -28,14 +49,37 @@ class RagIndexingViewModelTest {
 
             val state = viewModel.uiState.value
             assertEquals(RagIndexingPhase.SUCCESS, state.phase)
-            assertEquals(2, state.indexSummaries.size)
-            assertEquals(2, storage.indexes.size)
-            assertEquals(2, storage.cache.size)
-            assertEquals(2, state.progress.embedded)
-            assertEquals(2, state.progress.total)
+            assertEquals(listOf(RagIndexingStrategy.FIXED), state.indexSummaries.map { summary -> summary.strategy })
+            assertEquals(setOf(RagIndexingStrategy.FIXED), storage.indexes.keys)
+            assertEquals(1, storage.cache.size)
+            assertEquals(1, state.progress.embedded)
+            assertEquals(1, state.progress.total)
             assertEquals(0, state.progress.cachedCount)
             assertNotNull(storage.indexes[RagIndexingStrategy.FIXED])
+            assertEquals(null, storage.indexes[RagIndexingStrategy.STRUCTURE])
+            assertEquals("/tmp/rag-index/fixed/index.json", state.progress.outputPaths.fixedIndex)
+            assertEquals(null, state.progress.outputPaths.structureIndex)
+        }
+
+    @Test
+    fun buildIndexUsesSelectedStructureStrategyOnly() =
+        runTest {
+            val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")))
+            val client = RecordingEmbeddingClient()
+            val viewModel = viewModel(storage = storage, client = client)
+
+            viewModel.onAction(RagIndexingAction.StrategyChanged(RagIndexingStrategy.STRUCTURE))
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertEquals(listOf(RagIndexingStrategy.STRUCTURE), state.indexSummaries.map { summary -> summary.strategy })
+            assertEquals(setOf(RagIndexingStrategy.STRUCTURE), storage.indexes.keys)
+            assertEquals(null, storage.indexes[RagIndexingStrategy.FIXED])
             assertNotNull(storage.indexes[RagIndexingStrategy.STRUCTURE])
+            assertEquals(null, state.progress.outputPaths.fixedIndex)
+            assertEquals("/tmp/rag-index/structure/index.json", state.progress.outputPaths.structureIndex)
         }
 
     @Test
@@ -92,7 +136,7 @@ class RagIndexingViewModelTest {
             advanceUntilIdle()
 
             assertEquals(callsAfterFirstBuild, client.calls.size)
-            assertEquals(2, viewModel.uiState.value.progress.cachedCount)
+            assertEquals(1, viewModel.uiState.value.progress.cachedCount)
         }
 
     @Test
@@ -138,12 +182,13 @@ class RagIndexingViewModelTest {
             val client = RecordingEmbeddingClient()
             val viewModel = viewModel(storage = storage, client = client)
 
+            viewModel.onAction(RagIndexingAction.StrategyChanged(RagIndexingStrategy.STRUCTURE))
             viewModel.onAction(RagIndexingAction.BuildIndex)
             advanceUntilIdle()
 
             assertEquals(1, client.embeddedInputCount)
             assertEquals(2, storage.cache.size)
-            assertEquals(1, viewModel.uiState.value.progress.cachedCount)
+            assertEquals(0, viewModel.uiState.value.progress.cachedCount)
         }
 
     @Test
@@ -213,6 +258,7 @@ class RagIndexingViewModelTest {
             )
             assertTrue(comparisonQuery.fixed.size <= 2)
             assertTrue(comparisonQuery.structure.size <= 2)
+            assertEquals(setOf(RagIndexingStrategy.FIXED, RagIndexingStrategy.STRUCTURE), storage.indexes.keys)
             assertEquals(listOf("fixed", "structure"), report.strategies.map { stats -> stats.strategy })
             assertTrue(storage.comparisonMarkdown.orEmpty().contains("Retrieval Examples"))
             assertEquals("/tmp/rag-index/comparison.json", state.comparisonSummary?.jsonPath)
@@ -229,6 +275,7 @@ class RagIndexingViewModelTest {
             val client = RecordingEmbeddingClient()
             val viewModel = viewModel(storage = storage, client = client)
 
+            viewModel.onAction(RagIndexingAction.QueryChanged(" "))
             viewModel.onAction(RagIndexingAction.CompareStrategies)
             advanceUntilIdle()
 
@@ -241,13 +288,137 @@ class RagIndexingViewModelTest {
             assertEquals(null, storage.comparisonReport)
         }
 
+    @Test
+    fun compareModesRunsNoRagRagAndEvaluator() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus =
+                        listOf(
+                            document(id = "alpha", text = "# Alpha\nRAG answers must cite internal chunks."),
+                            document(id = "beta", text = "# Beta\nGeneral model answer without sources."),
+                        ),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            val llmAgent =
+                RecordingLlmAgent { call ->
+                    when {
+                        call.prompt == "What should RAG cite?" -> GeminiResult.Success("No RAG answer")
+                        call.prompt.contains("Ты RAG-ассистент") -> GeminiResult.Success("RAG answer [S1]")
+                        call.prompt.contains("Ты оцениваешь качество") -> GeminiResult.Success("Winner: WITH_RAG")
+                        else -> GeminiResult.Success("Unexpected")
+                    }
+                }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What should RAG cite?"))
+            viewModel.onAction(RagIndexingAction.ExpectedAnswerChanged("Must cite internal chunks."))
+            viewModel.onAction(RagIndexingAction.ExpectedSourcesChanged("alpha.md"))
+            viewModel.onAction(RagIndexingAction.LlmModelChanged(RagLlmModelOption.DEEPSEEK_V4_FLASH))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertTrue(state.noRagAnswerState is ResponsePaneState.Success)
+            assertTrue(state.ragAnswerState is ResponsePaneState.Success)
+            assertTrue(state.qualityEvaluationState is ResponsePaneState.Success)
+            assertTrue(state.ragContextResults.isNotEmpty())
+            assertEquals(setOf(RagIndexingStrategy.FIXED), storage.indexes.keys)
+            assertEquals(3, llmAgent.calls.size)
+            assertEquals("What should RAG cite?", llmAgent.calls[0].prompt)
+            assertTrue(llmAgent.calls[1].prompt.contains("[S1]"))
+            assertTrue(llmAgent.calls[2].prompt.contains("Must cite internal chunks."))
+            assertTrue(llmAgent.calls.all { call -> call.modelName == RagLlmModelOption.DEEPSEEK_V4_FLASH.modelName })
+        }
+
+    @Test
+    fun editedExpectationOnlyAffectsEvaluator() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus = listOf(document(id = "alpha", text = "# Alpha\nCrossEncoder reranking improves precision.")),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            val llmAgent = RecordingLlmAgent { GeminiResult.Success("ok") }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What is reranking?"))
+            viewModel.onAction(RagIndexingAction.ExpectedAnswerChanged("custom expectation"))
+            viewModel.onAction(RagIndexingAction.ExpectedSourcesChanged("custom source"))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val ragPrompt = llmAgent.calls.single { call -> call.prompt.contains("Ты RAG-ассистент") }.prompt
+            val evaluatorPrompt = llmAgent.calls.single { call -> call.prompt.contains("Ты оцениваешь качество") }.prompt
+            assertFalse(ragPrompt.contains("custom expectation"))
+            assertFalse(ragPrompt.contains("custom source"))
+            assertTrue(evaluatorPrompt.contains("custom expectation"))
+            assertTrue(evaluatorPrompt.contains("custom source"))
+        }
+
+    @Test
+    fun emptyCorpusSelectionShowsErrorBeforeCompareModes() =
+        runTest {
+            val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")))
+            val viewModel = viewModel(storage = storage, client = RecordingEmbeddingClient(), llmAgent = RecordingLlmAgent())
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What is alpha?"))
+            viewModel.onAction(RagIndexingAction.CorpusDocumentToggled(documentId = "alpha", selected = false))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.ERROR, state.phase)
+            assertEquals("Select at least one corpus document.", state.userFacingError)
+        }
+
+    @Test
+    fun changedCorpusSelectionRebuildsIndexWithDifferentSourceHash() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus =
+                        listOf(
+                            document(id = "alpha", text = "# Alpha\nalpha content"),
+                            document(id = "beta", text = "# Beta\nbeta content"),
+                        ),
+                )
+            val client = RecordingEmbeddingClient()
+            val viewModel = viewModel(storage = storage, client = client)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            advanceUntilIdle()
+            val firstSourceHash = requireNotNull(storage.indexes[RagIndexingStrategy.FIXED]).sourceHash
+
+            viewModel.onAction(RagIndexingAction.CorpusDocumentToggled(documentId = "beta", selected = false))
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            advanceUntilIdle()
+            val secondSourceHash = requireNotNull(storage.indexes[RagIndexingStrategy.FIXED]).sourceHash
+
+            assertTrue(firstSourceHash != secondSourceHash)
+            assertEquals(
+                setOf("alpha"),
+                storage.indexes[RagIndexingStrategy.FIXED]
+                    ?.chunks
+                    ?.map { chunk -> chunk.documentId }
+                    ?.toSet(),
+            )
+        }
+
     private fun viewModel(
         storage: FakeRagIndexingStorage,
         client: RecordingEmbeddingClient,
+        llmAgent: LlmAgent = UnusedLlmAgent,
     ): RagIndexingViewModel =
         RagIndexingViewModel(
             embeddingClient = client,
             storage = storage,
+            llmAgent = llmAgent,
             ioDispatcher = mainDispatcherRule.dispatcher,
             embeddingBatchSize = 2,
         )
@@ -289,6 +460,30 @@ class RagIndexingViewModelTest {
         val inputs: List<String>,
     )
 
+    private class RecordingLlmAgent(
+        private val responder: suspend (LlmCall) -> GeminiResult<String> = { GeminiResult.Success("ok") },
+    ) : LlmAgent {
+        val calls = mutableListOf<LlmCall>()
+
+        override suspend fun sendMessage(
+            messages: List<AgentMessage>,
+            systemInstruction: String?,
+            generationConfig: GeminiGenerationConfig?,
+            modelName: String?,
+            totalTokenLimit: Int?,
+        ): GeminiResult<String> {
+            val prompt = messages.lastOrNull { message -> message is AgentMessage.User }?.text.orEmpty()
+            val call = LlmCall(prompt = prompt, modelName = modelName)
+            calls += call
+            return responder(call)
+        }
+    }
+
+    private data class LlmCall(
+        val prompt: String,
+        val modelName: String?,
+    )
+
     private class FakeRagIndexingStorage(
         var corpus: List<RagDocument>,
         cache: List<RagEmbeddingCacheEntry> = emptyList(),
@@ -307,9 +502,24 @@ class RagIndexingViewModelTest {
         var comparisonMarkdown: String? = null
         var loadCorpusCount = 0
 
-        override suspend fun loadCorpus(): List<RagDocument> {
+        override suspend fun listCorpus(): List<RagCorpusDocumentInfo> =
+            corpus.map { document ->
+                RagCorpusDocumentInfo(
+                    id = document.id,
+                    title = document.title,
+                    source = document.source,
+                    wordCount = document.text.split(Regex("\\s+")).count { word -> word.isNotBlank() },
+                    selectedByDefault = document.id != "moby-dick",
+                )
+            }
+
+        override suspend fun loadCorpus(documentIds: Set<String>): List<RagDocument> {
             loadCorpusCount += 1
-            return corpus
+            return if (documentIds.isEmpty()) {
+                corpus
+            } else {
+                corpus.filter { document -> document.id in documentIds }
+            }
         }
 
         override suspend fun loadEmbeddingCache(): List<RagEmbeddingCacheEntry> = cache
@@ -344,6 +554,16 @@ class RagIndexingViewModelTest {
             )
         }
     }
+}
+
+private object UnusedLlmAgent : LlmAgent {
+    override suspend fun sendMessage(
+        messages: List<AgentMessage>,
+        systemInstruction: String?,
+        generationConfig: GeminiGenerationConfig?,
+        modelName: String?,
+        totalTokenLimit: Int?,
+    ): GeminiResult<String> = error("LLM should not be called in this test.")
 }
 
 private val oldDemoQueries =

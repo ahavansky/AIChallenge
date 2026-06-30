@@ -1,10 +1,17 @@
 package com.akhavanskii.aichallenge.feature.ragindexing
 
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
+
 data class RagIndexingUiState(
     val endpoint: String = OllamaEmbeddingClient.DEFAULT_ENDPOINT,
     val model: String = OllamaEmbeddingClient.DEFAULT_MODEL,
+    val corpusDocuments: List<RagCorpusDocumentUi> = emptyList(),
+    val selectedCorpusDocumentIds: Set<String> = emptySet(),
     val selectedStrategy: RagIndexingStrategy = RagIndexingStrategy.FIXED,
+    val selectedLlmModel: RagLlmModelOption = RagLlmModelOption.DEFAULT,
     val query: String = "",
+    val expectedAnswer: String = "",
+    val expectedSources: String = "",
     val topK: Int = DEFAULT_TOP_K,
     val phase: RagIndexingPhase = RagIndexingPhase.IDLE,
     val progress: RagIndexingProgress = RagIndexingProgress(),
@@ -12,13 +19,23 @@ data class RagIndexingUiState(
     val comparisonSummary: RagComparisonSummary? = null,
     val comparisonReport: RagComparisonReport? = null,
     val searchResults: List<RagSearchResultUi> = emptyList(),
+    val ragContextResults: List<RagSearchResultUi> = emptyList(),
+    val noRagAnswerState: ResponsePaneState =
+        ResponsePaneState.Empty("No-RAG answer will appear after compare."),
+    val ragAnswerState: ResponsePaneState =
+        ResponsePaneState.Empty("RAG answer will appear after compare."),
+    val qualityEvaluationState: ResponsePaneState =
+        ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
     val userFacingError: String? = null,
 ) {
     val isBusy: Boolean
         get() =
-            phase == RagIndexingPhase.BUILDING ||
+            phase == RagIndexingPhase.LOADING_CORPUS ||
+                phase == RagIndexingPhase.BUILDING ||
                 phase == RagIndexingPhase.COMPARING ||
-                phase == RagIndexingPhase.SEARCHING
+                phase == RagIndexingPhase.SEARCHING ||
+                phase == RagIndexingPhase.ANSWERING ||
+                phase == RagIndexingPhase.EVALUATING
 
     companion object {
         const val DEFAULT_TOP_K = 5
@@ -27,12 +44,71 @@ data class RagIndexingUiState(
 
 enum class RagIndexingPhase {
     IDLE,
+    LOADING_CORPUS,
     BUILDING,
     COMPARING,
     SEARCHING,
+    ANSWERING,
+    EVALUATING,
     SUCCESS,
     ERROR,
     CANCELLED,
+}
+
+enum class RagLlmProvider(
+    val displayName: String,
+) {
+    GEMINI(displayName = "Gemini API"),
+    DEEPSEEK(displayName = "DeepSeek API"),
+}
+
+enum class RagLlmModelOption(
+    val provider: RagLlmProvider,
+    val modelName: String,
+    val title: String,
+    val description: String,
+) {
+    GEMINI_3_5_FLASH(
+        provider = RagLlmProvider.GEMINI,
+        modelName = "gemini-3.5-flash",
+        title = "Gemini 3.5 Flash",
+        description = "Default project Gemini model for fast generation and evaluation.",
+    ),
+    GEMINI_2_5_FLASH(
+        provider = RagLlmProvider.GEMINI,
+        modelName = "gemini-2.5-flash",
+        title = "Gemini 2.5 Flash",
+        description = "Balanced Gemini model for everyday RAG answers.",
+    ),
+    GEMINI_2_5_FLASH_LITE(
+        provider = RagLlmProvider.GEMINI,
+        modelName = "gemini-2.5-flash-lite",
+        title = "Gemini 2.5 Flash-Lite",
+        description = "Lower-latency Gemini model for quick RAG iterations.",
+    ),
+    GEMMA_4_31B_IT(
+        provider = RagLlmProvider.GEMINI,
+        modelName = "gemma-4-31b-it",
+        title = "Gemma 4 31B IT",
+        description = "Gemma open model served through the Gemini-compatible transport.",
+    ),
+    DEEPSEEK_V4_FLASH(
+        provider = RagLlmProvider.DEEPSEEK,
+        modelName = "deepseek-v4-flash",
+        title = "DeepSeek V4 Flash",
+        description = "Lower-latency DeepSeek model for iterative RAG comparisons.",
+    ),
+    DEEPSEEK_V4_PRO(
+        provider = RagLlmProvider.DEEPSEEK,
+        modelName = "deepseek-v4-pro",
+        title = "DeepSeek V4 Pro",
+        description = "Higher-capability DeepSeek model for harder RAG questions.",
+    ),
+    ;
+
+    companion object {
+        val DEFAULT: RagLlmModelOption = GEMINI_2_5_FLASH
+    }
 }
 
 enum class RagIndexingStrategy(
@@ -64,8 +140,25 @@ sealed interface RagIndexingAction {
         val strategy: RagIndexingStrategy,
     ) : RagIndexingAction
 
+    data class LlmModelChanged(
+        val model: RagLlmModelOption,
+    ) : RagIndexingAction
+
+    data class CorpusDocumentToggled(
+        val documentId: String,
+        val selected: Boolean,
+    ) : RagIndexingAction
+
     data class QueryChanged(
         val query: String,
+    ) : RagIndexingAction
+
+    data class ExpectedAnswerChanged(
+        val expectedAnswer: String,
+    ) : RagIndexingAction
+
+    data class ExpectedSourcesChanged(
+        val expectedSources: String,
     ) : RagIndexingAction
 
     data class TopKChanged(
@@ -78,8 +171,18 @@ sealed interface RagIndexingAction {
 
     data object Search : RagIndexingAction
 
+    data object CompareModes : RagIndexingAction
+
     data object Cancel : RagIndexingAction
 }
+
+data class RagCorpusDocumentUi(
+    val id: String,
+    val title: String,
+    val source: String,
+    val wordCount: Int,
+    val selectedByDefault: Boolean,
+)
 
 data class RagIndexingProgress(
     val currentStrategy: RagIndexingStrategy? = null,

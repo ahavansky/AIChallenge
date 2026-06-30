@@ -23,7 +23,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +50,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.akhavanskii.aichallenge.core.designsystem.AIChallengeTheme
 import com.akhavanskii.aichallenge.core.designsystem.ChallengeButton
+import com.akhavanskii.aichallenge.core.designsystem.ChallengeMarkdownBody
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -128,7 +133,7 @@ private fun RagIndexingHeader(onBack: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Build local chunk indexes, compare retrieval strategies, and search the corpus.",
+                text = "Build local chunk indexes, answer with or without RAG, and compare quality.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -152,6 +157,14 @@ private fun RagIndexingControls(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        CorpusSelector(
+            documents = state.corpusDocuments,
+            selectedDocumentIds = state.selectedCorpusDocumentIds,
+            enabled = !state.isBusy,
+            onDocumentToggled = { documentId, selected ->
+                onAction(RagIndexingAction.CorpusDocumentToggled(documentId = documentId, selected = selected))
+            },
+        )
         RagTextField(
             value = state.endpoint,
             onValueChange = { onAction(RagIndexingAction.EndpointChanged(it)) },
@@ -173,17 +186,46 @@ private fun RagIndexingControls(
             enabled = !state.isBusy,
             onSelected = { onAction(RagIndexingAction.StrategyChanged(it)) },
         )
+        LlmModelSelector(
+            selectedModel = state.selectedLlmModel,
+            enabled = !state.isBusy,
+            onSelected = { onAction(RagIndexingAction.LlmModelChanged(it)) },
+        )
         RagTextField(
             value = state.query,
             onValueChange = { onAction(RagIndexingAction.QueryChanged(it)) },
             enabled = !state.isBusy,
-            label = "Query",
-            placeholder = "How does the app reach host services from emulator?",
+            label = "Control question",
+            placeholder = "Enter your own question for RAG comparison.",
             minLines = 3,
             modifier =
                 Modifier
                     .heightIn(min = 112.dp)
                     .testTag(RagIndexingTags.QUERY_INPUT),
+        )
+        RagTextField(
+            value = state.expectedAnswer,
+            onValueChange = { onAction(RagIndexingAction.ExpectedAnswerChanged(it)) },
+            enabled = !state.isBusy,
+            label = "Expected answer",
+            placeholder = "Facts that should be present in the answer.",
+            minLines = 3,
+            modifier =
+                Modifier
+                    .heightIn(min = 112.dp)
+                    .testTag(RagIndexingTags.EXPECTED_ANSWER_INPUT),
+        )
+        RagTextField(
+            value = state.expectedSources,
+            onValueChange = { onAction(RagIndexingAction.ExpectedSourcesChanged(it)) },
+            enabled = !state.isBusy,
+            label = "Expected sources",
+            placeholder = "Document names or sections expected in RAG context.",
+            minLines = 2,
+            modifier =
+                Modifier
+                    .heightIn(min = 88.dp)
+                    .testTag(RagIndexingTags.EXPECTED_SOURCES_INPUT),
         )
         TopKSelector(
             topK = state.topK,
@@ -194,6 +236,131 @@ private fun RagIndexingControls(
             state = state,
             onAction = onAction,
         )
+    }
+}
+
+@Composable
+private fun CorpusSelector(
+    documents: List<RagCorpusDocumentUi>,
+    selectedDocumentIds: Set<String>,
+    enabled: Boolean,
+    onDocumentToggled: (String, Boolean) -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .testTag(RagIndexingTags.CORPUS_SELECTOR),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Corpus",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (documents.isEmpty()) {
+            Text(
+                text = "Loading corpus documents.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            documents.forEach { document ->
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .testTag("${RagIndexingTags.CORPUS_DOCUMENT_PREFIX}_${document.id}"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Checkbox(
+                        checked = document.id in selectedDocumentIds,
+                        onCheckedChange = { checked -> onDocumentToggled(document.id, checked) },
+                        enabled = enabled,
+                        modifier = Modifier.testTag("${RagIndexingTags.CORPUS_CHECKBOX_PREFIX}_${document.id}"),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = document.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${document.source} - ${document.wordCount} words",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LlmModelSelector(
+    selectedModel: RagLlmModelOption,
+    enabled: Boolean,
+    onSelected: (RagLlmModelOption) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "LLM model",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        val expanded = remember { mutableStateOf(false) }
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            OutlinedButton(
+                onClick = { expanded.value = true },
+                enabled = enabled,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag(RagIndexingTags.LLM_MODEL_SELECTOR),
+            ) {
+                Text(
+                    text = "${selectedModel.title} - ${selectedModel.provider.displayName}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            DropdownMenu(
+                expanded = expanded.value,
+                onDismissRequest = { expanded.value = false },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                RagLlmModelOption.entries.forEach { model ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "${model.title} - ${model.provider.displayName}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        onClick = {
+                            expanded.value = false
+                            onSelected(model)
+                        },
+                        modifier = Modifier.testTag("${RagIndexingTags.LLM_MODEL_PREFIX}_${model.name}"),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -290,6 +457,7 @@ private fun RagActionButtons(
     state: RagIndexingUiState,
     onAction: (RagIndexingAction) -> Unit,
 ) {
+    val hasCorpusSelection = state.corpusDocuments.isEmpty() || state.selectedCorpusDocumentIds.isNotEmpty()
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -297,7 +465,7 @@ private fun RagActionButtons(
     ) {
         ChallengeButton(
             onClick = { onAction(RagIndexingAction.BuildIndex) },
-            enabled = !state.isBusy,
+            enabled = !state.isBusy && hasCorpusSelection,
             modifier =
                 Modifier
                     .widthIn(min = 136.dp)
@@ -307,7 +475,7 @@ private fun RagActionButtons(
         }
         ChallengeButton(
             onClick = { onAction(RagIndexingAction.CompareStrategies) },
-            enabled = !state.isBusy && state.query.isNotBlank(),
+            enabled = !state.isBusy && state.query.isNotBlank() && hasCorpusSelection,
             modifier =
                 Modifier
                     .widthIn(min = 172.dp)
@@ -317,13 +485,23 @@ private fun RagActionButtons(
         }
         ChallengeButton(
             onClick = { onAction(RagIndexingAction.Search) },
-            enabled = !state.isBusy && state.query.isNotBlank(),
+            enabled = !state.isBusy && state.query.isNotBlank() && hasCorpusSelection,
             modifier =
                 Modifier
                     .widthIn(min = 112.dp)
                     .testTag(RagIndexingTags.SEARCH_BUTTON),
         ) {
             Text("Search")
+        }
+        ChallengeButton(
+            onClick = { onAction(RagIndexingAction.CompareModes) },
+            enabled = !state.isBusy && state.query.isNotBlank() && hasCorpusSelection,
+            modifier =
+                Modifier
+                    .widthIn(min = 156.dp)
+                    .testTag(RagIndexingTags.COMPARE_MODES_BUTTON),
+        ) {
+            Text("Compare Modes")
         }
         OutlinedButton(
             onClick = { onAction(RagIndexingAction.Cancel) },
@@ -354,6 +532,7 @@ private fun RagIndexingOutputs(
         state.userFacingError?.let { error ->
             ErrorMessage(message = error)
         }
+        RagAgentSection(state = state)
         OutputPaths(paths = state.progress.outputPaths)
         IndexSummaries(summaries = state.indexSummaries)
         ComparisonSection(
@@ -434,6 +613,126 @@ private fun ErrorMessage(message: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
+    }
+}
+
+@Composable
+private fun RagAgentSection(state: RagIndexingUiState) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .testTag(RagIndexingTags.AGENT_SECTION),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        HorizontalDivider()
+        Text(
+            text = "RAG agent",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        AgentResponsePane(
+            title = "Answer without RAG",
+            state = state.noRagAnswerState,
+            modifier = Modifier.testTag(RagIndexingTags.NO_RAG_ANSWER),
+        )
+        AgentResponsePane(
+            title = "Answer with RAG",
+            state = state.ragAnswerState,
+            modifier = Modifier.testTag(RagIndexingTags.RAG_ANSWER),
+        )
+        RetrievedContext(results = state.ragContextResults)
+        AgentResponsePane(
+            title = "Quality comparison",
+            state = state.qualityEvaluationState,
+            modifier = Modifier.testTag(RagIndexingTags.QUALITY_EVALUATION),
+        )
+    }
+}
+
+@Composable
+private fun AgentResponsePane(
+    title: String,
+    state: ResponsePaneState,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        when (state) {
+            is ResponsePaneState.Empty ->
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            ResponsePaneState.Loading ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Text(
+                        text = "Waiting for LLM.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            is ResponsePaneState.Success ->
+                SelectionContainer {
+                    ChallengeMarkdownBody(
+                        body = state.response,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            is ResponsePaneState.Error ->
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+        }
+    }
+}
+
+@Composable
+private fun RetrievedContext(results: List<RagSearchResultUi>) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .testTag(RagIndexingTags.RETRIEVED_CONTEXT),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Retrieved context",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (results.isEmpty()) {
+            Text(
+                text = "No RAG context yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            results.forEachIndexed { index, result ->
+                SearchResultDetails(
+                    result = result,
+                    modifier = Modifier.testTag("${RagIndexingTags.RETRIEVED_CONTEXT_RESULT_PREFIX}_$index"),
+                )
+            }
+        }
     }
 }
 
@@ -897,9 +1196,12 @@ private fun LabeledValue(
 private fun RagIndexingPhase.displayName(): String =
     when (this) {
         RagIndexingPhase.IDLE -> "Idle"
+        RagIndexingPhase.LOADING_CORPUS -> "Loading corpus"
         RagIndexingPhase.BUILDING -> "Building"
         RagIndexingPhase.COMPARING -> "Comparing"
         RagIndexingPhase.SEARCHING -> "Searching"
+        RagIndexingPhase.ANSWERING -> "Answering"
+        RagIndexingPhase.EVALUATING -> "Evaluating"
         RagIndexingPhase.SUCCESS -> "Success"
         RagIndexingPhase.ERROR -> "Error"
         RagIndexingPhase.CANCELLED -> "Cancelled"
@@ -926,14 +1228,22 @@ private const val RAG_INDEX_PATH_PREFIX = "rag-index/"
 object RagIndexingTags {
     const val SCREEN = "rag_indexing_screen"
     const val BACK_BUTTON = "rag_indexing_back_button"
+    const val CORPUS_SELECTOR = "rag_indexing_corpus_selector"
+    const val CORPUS_DOCUMENT_PREFIX = "rag_indexing_corpus_document"
+    const val CORPUS_CHECKBOX_PREFIX = "rag_indexing_corpus_checkbox"
     const val ENDPOINT_INPUT = "rag_indexing_endpoint_input"
     const val MODEL_INPUT = "rag_indexing_model_input"
     const val STRATEGY_PREFIX = "rag_indexing_strategy"
+    const val LLM_MODEL_SELECTOR = "rag_indexing_llm_model_selector"
+    const val LLM_MODEL_PREFIX = "rag_indexing_llm_model"
     const val QUERY_INPUT = "rag_indexing_query_input"
+    const val EXPECTED_ANSWER_INPUT = "rag_indexing_expected_answer_input"
+    const val EXPECTED_SOURCES_INPUT = "rag_indexing_expected_sources_input"
     const val TOP_K_SLIDER = "rag_indexing_top_k_slider"
     const val BUILD_BUTTON = "rag_indexing_build_button"
     const val COMPARE_BUTTON = "rag_indexing_compare_button"
     const val SEARCH_BUTTON = "rag_indexing_search_button"
+    const val COMPARE_MODES_BUTTON = "rag_indexing_compare_modes_button"
     const val CANCEL_BUTTON = "rag_indexing_cancel_button"
     const val OUTPUTS = "rag_indexing_outputs"
     const val STATUS = "rag_indexing_status"
@@ -948,6 +1258,12 @@ object RagIndexingTags {
     const val INDEX_SUMMARIES = "rag_indexing_index_summaries"
     const val COMPARISON = "rag_indexing_comparison"
     const val COMPARISON_QUERY_PREFIX = "rag_indexing_comparison_query"
+    const val AGENT_SECTION = "rag_indexing_agent_section"
+    const val NO_RAG_ANSWER = "rag_indexing_no_rag_answer"
+    const val RAG_ANSWER = "rag_indexing_rag_answer"
+    const val QUALITY_EVALUATION = "rag_indexing_quality_evaluation"
+    const val RETRIEVED_CONTEXT = "rag_indexing_retrieved_context"
+    const val RETRIEVED_CONTEXT_RESULT_PREFIX = "rag_indexing_retrieved_context_result"
     const val SEARCH_RESULTS = "rag_indexing_search_results"
     const val SEARCH_SCORE_CHART = "rag_indexing_search_score_chart"
     const val SEARCH_SCORE_BAR_PREFIX = "rag_indexing_search_score_bar"
@@ -974,6 +1290,10 @@ private fun RagIndexingScreenResultsPreview() {
             state =
                 RagIndexingUiState(
                     query = "How does emulator reach host services?",
+                    expectedAnswer = "The Android emulator should use 10.0.2.2 to reach host services.",
+                    expectedSources = "rag_course_2026_06_29.md",
+                    corpusDocuments = sampleCorpusDocuments(),
+                    selectedCorpusDocumentIds = setOf("rag_course_2026_06_29"),
                     phase = RagIndexingPhase.SUCCESS,
                     progress =
                         RagIndexingProgress(
@@ -1020,12 +1340,40 @@ private fun RagIndexingScreenResultsPreview() {
                         ),
                     comparisonReport = sampleComparisonReport(),
                     searchResults = sampleSearchResults(),
+                    ragContextResults = sampleSearchResults().take(2),
+                    noRagAnswerState = ResponsePaneState.Success("Use localhost from the emulator."),
+                    ragAnswerState =
+                        ResponsePaneState.Success(
+                            "Use `10.0.2.2` from the Android emulator to reach services running on the host machine. Source: [S1] `fixed_0001`.",
+                        ),
+                    qualityEvaluationState =
+                        ResponsePaneState.Success(
+                            "| mode | accuracy | source_grounding |\n|---|---:|---:|\n| WITHOUT_RAG | 2 | 1 |\n| WITH_RAG | 5 | 5 |\n\nWinner: WITH_RAG.",
+                        ),
                 ),
             onAction = {},
             onBack = {},
         )
     }
 }
+
+private fun sampleCorpusDocuments(): List<RagCorpusDocumentUi> =
+    listOf(
+        RagCorpusDocumentUi(
+            id = "rag_course_2026_06_29",
+            title = "RAG: Эмбеддинги, векторный поиск и чанкинг (Неделя 2)",
+            source = "assets/rag/rag_course_2026_06_29.md",
+            wordCount = 3_200,
+            selectedByDefault = true,
+        ),
+        RagCorpusDocumentUi(
+            id = "moby-dick",
+            title = "Moby-Dick",
+            source = "assets/rag/moby-dick.md",
+            wordCount = 210_000,
+            selectedByDefault = false,
+        ),
+    )
 
 private fun sampleSearchResults(): List<RagSearchResultUi> =
     listOf(

@@ -2,6 +2,13 @@ package com.akhavanskii.aichallenge.feature.ragindexing
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.akhavanskii.aichallenge.core.network.AgentMessage
+import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
+import com.akhavanskii.aichallenge.core.network.GeminiNetworkError
+import com.akhavanskii.aichallenge.core.network.GeminiResult
+import com.akhavanskii.aichallenge.core.network.LlmAgent
+import com.akhavanskii.aichallenge.core.utils.normalizedPromptOrNull
+import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -20,6 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class RagIndexingViewModel private constructor(
     private val embeddingClient: EmbeddingClient,
+    private val llmAgent: LlmAgent,
     private val storage: RagIndexingStorage,
     private val indexer: RagIndexer,
     private val ioDispatcher: CoroutineDispatcher,
@@ -29,9 +37,11 @@ class RagIndexingViewModel private constructor(
     @Inject
     constructor(
         embeddingClient: EmbeddingClient,
+        llmAgent: LlmAgent,
         storage: RagIndexingStorage,
     ) : this(
         embeddingClient = embeddingClient,
+        llmAgent = llmAgent,
         storage = storage,
         indexer = RagIndexer(),
         ioDispatcher = Dispatchers.IO,
@@ -42,11 +52,13 @@ class RagIndexingViewModel private constructor(
     internal constructor(
         embeddingClient: EmbeddingClient,
         storage: RagIndexingStorage,
+        llmAgent: LlmAgent = UnconfiguredLlmAgent,
         indexer: RagIndexer = RagIndexer(),
         ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
         embeddingBatchSize: Int = DEFAULT_EMBEDDING_BATCH_SIZE,
     ) : this(
         embeddingClient = embeddingClient,
+        llmAgent = llmAgent,
         storage = storage,
         indexer = indexer,
         ioDispatcher = ioDispatcher,
@@ -54,18 +66,47 @@ class RagIndexingViewModel private constructor(
         marker = null,
     )
 
-    private val mutableUiState = MutableStateFlow(RagIndexingUiState(progress = RagIndexingProgress(outputPaths = storage.outputPaths)))
+    private val mutableUiState = MutableStateFlow(RagIndexingUiState())
     val uiState: StateFlow<RagIndexingUiState> = mutableUiState.asStateFlow()
 
     private val loadedIndexes = mutableMapOf<RagIndexingStrategy, RagIndex>()
     private var activeJob: Job? = null
+
+    init {
+        loadCorpusDocuments()
+    }
 
     fun onAction(action: RagIndexingAction) {
         when (action) {
             is RagIndexingAction.EndpointChanged -> updateWhenIdle { it.copy(endpoint = action.endpoint.trim(), userFacingError = null) }
             is RagIndexingAction.ModelChanged -> onModelChanged(action.model)
             is RagIndexingAction.StrategyChanged -> updateWhenIdle { it.copy(selectedStrategy = action.strategy, userFacingError = null) }
-            is RagIndexingAction.QueryChanged -> updateWhenIdle { it.copy(query = action.query, userFacingError = null) }
+            is RagIndexingAction.LlmModelChanged -> onLlmModelChanged(action.model)
+            is RagIndexingAction.CorpusDocumentToggled -> onCorpusDocumentToggled(action.documentId, action.selected)
+            is RagIndexingAction.QueryChanged ->
+                updateWhenIdle {
+                    it
+                        .copy(
+                            query = action.query,
+                            userFacingError = null,
+                        ).resetAgentOutputs()
+                }
+            is RagIndexingAction.ExpectedAnswerChanged ->
+                updateWhenIdle {
+                    it
+                        .copy(
+                            expectedAnswer = action.expectedAnswer,
+                            userFacingError = null,
+                        ).resetEvaluationOutput()
+                }
+            is RagIndexingAction.ExpectedSourcesChanged ->
+                updateWhenIdle {
+                    it
+                        .copy(
+                            expectedSources = action.expectedSources,
+                            userFacingError = null,
+                        ).resetEvaluationOutput()
+                }
             is RagIndexingAction.TopKChanged ->
                 updateWhenIdle {
                     it.copy(
@@ -76,7 +117,43 @@ class RagIndexingViewModel private constructor(
             RagIndexingAction.BuildIndex -> buildIndex()
             RagIndexingAction.CompareStrategies -> compareStrategies()
             RagIndexingAction.Search -> search()
+            RagIndexingAction.CompareModes -> compareModes()
             RagIndexingAction.Cancel -> cancelActiveJob()
+        }
+    }
+
+    private fun loadCorpusDocuments() {
+        viewModelScope.launch {
+            val result =
+                runCatching {
+                    withContext(ioDispatcher) { storage.listCorpus() }
+                }
+            result
+                .onSuccess { corpus ->
+                    val documents = corpus.map { info -> info.toUi() }
+                    val documentIds = documents.map { document -> document.id }.toSet()
+                    val defaultSelectedIds =
+                        documents
+                            .filter { document ->
+                                document.selectedByDefault
+                            }.map { document -> document.id }
+                            .toSet()
+                    mutableUiState.update { current ->
+                        val retainedSelection = current.selectedCorpusDocumentIds.intersect(documentIds)
+                        current.copy(
+                            corpusDocuments = documents,
+                            selectedCorpusDocumentIds =
+                                retainedSelection
+                                    .ifEmpty { defaultSelectedIds }
+                                    .ifEmpty { documents.firstOrNull()?.let { document -> setOf(document.id) }.orEmpty() },
+                        )
+                    }
+                }.onFailure { throwable ->
+                    if (throwable is CancellationException) throw throwable
+                    mutableUiState.update { current ->
+                        current.copy(userFacingError = throwable.message ?: "Failed to load RAG corpus list.")
+                    }
+                }
         }
     }
 
@@ -84,29 +161,69 @@ class RagIndexingViewModel private constructor(
         if (mutableUiState.value.isBusy) return
         loadedIndexes.clear()
         mutableUiState.update { current ->
-            current.copy(
-                model = model.trim(),
-                indexSummaries = emptyList(),
-                comparisonSummary = null,
-                comparisonReport = null,
-                searchResults = emptyList(),
-                userFacingError = null,
-            )
+            current
+                .copy(
+                    model = model.trim(),
+                    indexSummaries = emptyList(),
+                    comparisonSummary = null,
+                    comparisonReport = null,
+                    searchResults = emptyList(),
+                    userFacingError = null,
+                ).resetAgentOutputs()
+        }
+    }
+
+    private fun onLlmModelChanged(model: RagLlmModelOption) {
+        updateWhenIdle { current ->
+            current
+                .copy(
+                    selectedLlmModel = model,
+                    userFacingError = null,
+                ).resetAgentOutputs()
+        }
+    }
+
+    private fun onCorpusDocumentToggled(
+        documentId: String,
+        selected: Boolean,
+    ) {
+        if (mutableUiState.value.isBusy) return
+        loadedIndexes.clear()
+        mutableUiState.update { current ->
+            val updatedSelection =
+                if (selected) {
+                    current.selectedCorpusDocumentIds + documentId
+                } else {
+                    current.selectedCorpusDocumentIds - documentId
+                }
+            current
+                .copy(
+                    selectedCorpusDocumentIds = updatedSelection,
+                    indexSummaries = emptyList(),
+                    comparisonSummary = null,
+                    comparisonReport = null,
+                    searchResults = emptyList(),
+                    userFacingError = null,
+                ).resetAgentOutputs()
         }
     }
 
     private fun buildIndex() {
         val request = mutableUiState.value
         if (request.isBusy) return
+        val documentIds = request.selectedDocumentIdsOrShowError() ?: return
 
         launchActiveWork(RagIndexingPhase.BUILDING) {
             val endpoint = request.endpoint.trim()
             val model = request.model.trim()
             val result =
                 withContext(ioDispatcher) {
+                    val documents = loadSelectedDocuments(documentIds)
                     buildIndexesInternal(
                         endpoint = endpoint,
                         model = model,
+                        documents = documents,
+                        strategies = listOf(request.selectedStrategy),
                         phase = RagIndexingPhase.BUILDING,
                     )
                 }
@@ -139,6 +256,7 @@ class RagIndexingViewModel private constructor(
             }
             return
         }
+        val documentIds = request.selectedDocumentIdsOrShowError() ?: return
 
         launchActiveWork(RagIndexingPhase.COMPARING) {
             val endpoint = request.endpoint.trim()
@@ -150,6 +268,9 @@ class RagIndexingViewModel private constructor(
                         loadOrBuildIndexes(
                             endpoint = endpoint,
                             model = model,
+                            documentIds = documentIds,
+                            strategies = RagIndexingStrategy.entries,
+                            phase = RagIndexingPhase.COMPARING,
                         )
                     val report =
                         compareIndexes(
@@ -187,6 +308,7 @@ class RagIndexingViewModel private constructor(
     private fun search() {
         val request = mutableUiState.value
         if (request.isBusy) return
+        val documentIds = request.selectedDocumentIdsOrShowError() ?: return
 
         launchActiveWork(RagIndexingPhase.SEARCHING) {
             val endpoint = request.endpoint.trim()
@@ -199,6 +321,7 @@ class RagIndexingViewModel private constructor(
                         strategy = request.selectedStrategy,
                         query = request.query,
                         topK = request.topK,
+                        documentIds = documentIds,
                     )
                 }
 
@@ -210,6 +333,167 @@ class RagIndexingViewModel private constructor(
                 )
             }
         }
+    }
+
+    private fun compareModes() {
+        val request = mutableUiState.value
+        if (request.isBusy) return
+        val question = request.query.normalizedPromptOrNull()
+        if (question == null) {
+            mutableUiState.update { current ->
+                current.copy(
+                    phase = RagIndexingPhase.ERROR,
+                    userFacingError = "Enter a question before comparing RAG modes.",
+                )
+            }
+            return
+        }
+        val documentIds = request.selectedDocumentIdsOrShowError() ?: return
+
+        launchActiveWork(RagIndexingPhase.ANSWERING) {
+            val endpoint = request.endpoint.trim()
+            val embeddingModel = request.model.trim()
+            val llmModelName = request.selectedLlmModel.modelName
+            val strategy = request.selectedStrategy
+            val topK = request.topK.coerceIn(MIN_TOP_K, MAX_TOP_K)
+
+            mutableUiState.update { current ->
+                current.copy(
+                    noRagAnswerState = ResponsePaneState.Loading,
+                    ragAnswerState = ResponsePaneState.Loading,
+                    qualityEvaluationState = ResponsePaneState.Empty("Waiting for both answers before quality comparison."),
+                    ragContextResults = emptyList(),
+                    userFacingError = null,
+                )
+            }
+
+            val noRagResult =
+                llmAgent.sendMessage(
+                    prompt = RagAgentPrompts.buildNoRagPrompt(question),
+                    generationConfig = null,
+                    modelName = llmModelName,
+                )
+            mutableUiState.update { current ->
+                current.copy(noRagAnswerState = noRagResult.toPaneState())
+            }
+
+            val ragRun =
+                runCatching {
+                    runRagAnswer(
+                        endpoint = endpoint,
+                        embeddingModel = embeddingModel,
+                        llmModelName = llmModelName,
+                        strategy = strategy,
+                        question = question,
+                        topK = topK,
+                        documentIds = documentIds,
+                    )
+                }.getOrElse { throwable ->
+                    mutableUiState.update { current ->
+                        current.copy(
+                            ragAnswerState = ResponsePaneState.Error(throwable.toUserFacingMessage()),
+                        )
+                    }
+                    throw throwable
+                }
+            mutableUiState.update { current ->
+                current.copy(
+                    ragAnswerState = ragRun.answer.toPaneState(),
+                    ragContextResults = ragRun.retrieved.map { result -> result.toUi() },
+                )
+            }
+
+            val noRagAnswer = noRagResult.successValue()
+            val ragAnswer = ragRun.answer.successValue()
+            if (noRagAnswer == null || ragAnswer == null) {
+                mutableUiState.update { current ->
+                    current.copy(
+                        phase = RagIndexingPhase.SUCCESS,
+                        qualityEvaluationState =
+                            ResponsePaneState.Error(
+                                "Quality comparison skipped: both modes must return successful answers.",
+                            ),
+                    )
+                }
+                return@launchActiveWork
+            }
+
+            mutableUiState.update { current ->
+                current.copy(
+                    phase = RagIndexingPhase.EVALUATING,
+                    qualityEvaluationState = ResponsePaneState.Loading,
+                )
+            }
+            val evaluationPrompt =
+                RagAgentPrompts.buildEvaluationPrompt(
+                    question = question,
+                    expectedAnswer = request.expectedAnswer,
+                    expectedSources = request.expectedSources,
+                    retrievedResults = ragRun.retrieved,
+                    noRagAnswer = noRagAnswer,
+                    ragAnswer = ragAnswer,
+                )
+            val evaluationResult =
+                llmAgent.sendMessage(
+                    prompt = evaluationPrompt,
+                    generationConfig = null,
+                    modelName = llmModelName,
+                )
+            mutableUiState.update { current ->
+                current.copy(
+                    phase = RagIndexingPhase.SUCCESS,
+                    qualityEvaluationState = evaluationResult.toPaneState(),
+                    userFacingError = null,
+                )
+            }
+        }
+    }
+
+    private suspend fun runRagAnswer(
+        endpoint: String,
+        embeddingModel: String,
+        llmModelName: String,
+        strategy: RagIndexingStrategy,
+        question: String,
+        topK: Int,
+        documentIds: Set<String>,
+    ): RagAnswerRun {
+        val index =
+            loadOrBuildIndexes(
+                endpoint = endpoint,
+                model = embeddingModel,
+                documentIds = documentIds,
+                strategies = listOf(strategy),
+                phase = RagIndexingPhase.ANSWERING,
+            ).getValue(strategy)
+        val queryEmbedding =
+            embedBatch(
+                endpoint = endpoint,
+                model = embeddingModel,
+                inputs = listOf(question),
+            ).single()
+        val retrieved =
+            RagSearch.search(
+                index = index,
+                queryEmbedding = queryEmbedding,
+                topK = topK,
+            )
+        val prompt =
+            RagAgentPrompts.buildRagPrompt(
+                question = question,
+                results = retrieved,
+            )
+        val answer =
+            llmAgent.sendMessage(
+                prompt = prompt,
+                generationConfig = null,
+                modelName = llmModelName,
+            )
+
+        return RagAnswerRun(
+            answer = answer,
+            retrieved = retrieved,
+        )
     }
 
     private fun cancelActiveJob() {
@@ -238,7 +522,7 @@ class RagIndexingViewModel private constructor(
                 phase = phase,
                 progress =
                     RagIndexingProgress(
-                        outputPaths = storage.outputPaths,
+                        outputPaths = current.progress.outputPaths,
                     ),
                 userFacingError = null,
                 searchResults = if (phase == RagIndexingPhase.SEARCHING) emptyList() else current.searchResults,
@@ -266,17 +550,21 @@ class RagIndexingViewModel private constructor(
     private suspend fun buildIndexesInternal(
         endpoint: String,
         model: String,
+        documents: List<RagDocument>,
+        strategies: List<RagIndexingStrategy>,
         phase: RagIndexingPhase,
     ): BuildResult {
         currentCoroutineContext().ensureActive()
-        val documents = storage.loadCorpus()
         if (documents.isEmpty()) {
-            throw UserFacingRagException("No RAG corpus documents found in assets/rag.")
+            throw UserFacingRagException("No RAG corpus documents selected.")
+        }
+        if (strategies.isEmpty()) {
+            throw UserFacingRagException("Select at least one indexing strategy.")
         }
 
-        var outputPaths = storage.outputPaths
+        var outputPaths = RagIndexingOutputPaths()
         val chunksByStrategy = mutableMapOf<RagIndexingStrategy, List<RagChunk>>()
-        RagIndexingStrategy.entries.forEach { strategy ->
+        strategies.forEach { strategy ->
             currentCoroutineContext().ensureActive()
             mutableUiState.updateProgress(
                 phase = phase,
@@ -312,7 +600,7 @@ class RagIndexingViewModel private constructor(
         val summaries = mutableListOf<RagIndexSummary>()
         val indexes = mutableMapOf<RagIndexingStrategy, RagIndex>()
 
-        RagIndexingStrategy.entries.forEach { strategy ->
+        strategies.forEach { strategy ->
             currentCoroutineContext().ensureActive()
             val chunks = chunksByStrategy.getValue(strategy)
             val embeddingsByChunkId = mutableMapOf<String, List<Double>>()
@@ -379,6 +667,7 @@ class RagIndexingViewModel private constructor(
                         mapOf(
                             "cache_reused_count" to cachedCount.toString(),
                             "embedding_model" to model,
+                            "selected_document_ids" to documents.joinToString(separator = ",") { document -> document.id },
                         ),
                 )
             val indexPath = storage.writeIndex(strategy = strategy, index = index)
@@ -401,6 +690,13 @@ class RagIndexingViewModel private constructor(
 
         val cachePath = storage.writeEmbeddingCache(cacheByKey.values.toList())
         outputPaths = outputPaths.copy(embeddingCache = cachePath)
+        mutableUiState.updateProgress(
+            phase = phase,
+            total = totalChunks,
+            embedded = embeddedCount,
+            cachedCount = cachedCount,
+            outputPaths = outputPaths,
+        )
         loadedIndexes.clear()
         loadedIndexes.putAll(indexes)
 
@@ -414,18 +710,26 @@ class RagIndexingViewModel private constructor(
     private suspend fun loadOrBuildIndexes(
         endpoint: String,
         model: String,
+        documentIds: Set<String>,
+        strategies: List<RagIndexingStrategy>,
+        phase: RagIndexingPhase,
     ): Map<RagIndexingStrategy, RagIndex> {
+        val documents = loadSelectedDocuments(documentIds)
+        val selectedSourceHash = RagEmbeddingCacheKeys.sourceHash(documents)
+        val requestedStrategies = strategies.distinct()
+        if (requestedStrategies.isEmpty()) {
+            throw UserFacingRagException("Select at least one indexing strategy.")
+        }
         val inMemoryIndexes =
-            RagIndexingStrategy.entries.associateWith { strategy -> loadedIndexes[strategy] }
-        if (inMemoryIndexes.values.all { index -> index?.model == model }) {
+            requestedStrategies.associateWith { strategy -> loadedIndexes[strategy] }
+        if (inMemoryIndexes.values.all { index -> index?.model == model && index.sourceHash == selectedSourceHash }) {
             return inMemoryIndexes.mapValues { (_, index) -> index ?: error("Missing in-memory index.") }
         }
 
         val storedIndexes =
-            RagIndexingStrategy.entries.associateWith { strategy -> storage.loadIndex(strategy) }
-        if (storedIndexes.values.all { index -> index?.model == model }) {
+            requestedStrategies.associateWith { strategy -> storage.loadIndex(strategy) }
+        if (storedIndexes.values.all { index -> index?.model == model && index.sourceHash == selectedSourceHash }) {
             val indexes = storedIndexes.mapValues { (_, index) -> index ?: error("Missing stored index.") }
-            loadedIndexes.clear()
             loadedIndexes.putAll(indexes)
             mutableUiState.update { current ->
                 current.copy(
@@ -441,8 +745,18 @@ class RagIndexingViewModel private constructor(
         return buildIndexesInternal(
             endpoint = endpoint,
             model = model,
-            phase = RagIndexingPhase.COMPARING,
+            documents = documents,
+            strategies = requestedStrategies,
+            phase = phase,
         ).indexes
+    }
+
+    private suspend fun loadSelectedDocuments(documentIds: Set<String>): List<RagDocument> {
+        val documents = storage.loadCorpus(documentIds)
+        if (documents.isEmpty()) {
+            throw UserFacingRagException("No RAG corpus documents selected.")
+        }
+        return documents
     }
 
     private suspend fun compareIndexes(
@@ -484,20 +798,23 @@ class RagIndexingViewModel private constructor(
         strategy: RagIndexingStrategy,
         query: String,
         topK: Int,
+        documentIds: Set<String>,
     ): List<RagSearchResultUi> {
         val normalizedQuery = query.trim()
         if (normalizedQuery.isBlank()) {
             throw UserFacingRagException("Enter a query before search.")
         }
 
+        val documents = loadSelectedDocuments(documentIds)
+        val selectedSourceHash = RagEmbeddingCacheKeys.sourceHash(documents)
         val index =
             loadedIndexes[strategy]
-                ?: storage.loadIndex(strategy)?.also { loadedIndexes[strategy] = it }
-                ?: throw UserFacingRagException("Build or compare indexes before search.")
-
-        if (index.model != model.trim()) {
-            throw UserFacingRagException("Selected index was built with '${index.model}'. Build index for '${model.trim()}' first.")
-        }
+                ?.takeIf { index -> index.model == model.trim() && index.sourceHash == selectedSourceHash }
+                ?: storage
+                    .loadIndex(strategy)
+                    ?.takeIf { index -> index.model == model.trim() && index.sourceHash == selectedSourceHash }
+                    ?.also { index -> loadedIndexes[strategy] = index }
+                ?: throw UserFacingRagException("Build the selected corpus index before search.")
 
         val queryEmbedding =
             embedBatch(
@@ -536,6 +853,19 @@ class RagIndexingViewModel private constructor(
         }
     }
 
+    private fun RagIndexingUiState.selectedDocumentIdsOrShowError(): Set<String>? {
+        if (corpusDocuments.isNotEmpty() && selectedCorpusDocumentIds.isEmpty()) {
+            mutableUiState.update { current ->
+                current.copy(
+                    phase = RagIndexingPhase.ERROR,
+                    userFacingError = "Select at least one corpus document.",
+                )
+            }
+            return null
+        }
+        return selectedCorpusDocumentIds
+    }
+
     private fun updateWhenIdle(transform: (RagIndexingUiState) -> RagIndexingUiState) {
         mutableUiState.update { current ->
             if (current.isBusy) {
@@ -565,6 +895,11 @@ class RagIndexingViewModel private constructor(
         val summary: RagComparisonSummary,
     )
 
+    private data class RagAnswerRun(
+        val answer: GeminiResult<String>,
+        val retrieved: List<RagSearchResult>,
+    )
+
     private class EmbeddingRagException(
         val error: EmbeddingError,
     ) : RuntimeException(error.userMessage())
@@ -578,6 +913,16 @@ class RagIndexingViewModel private constructor(
         const val MIN_TOP_K = 1
         const val MAX_TOP_K = 20
     }
+}
+
+private object UnconfiguredLlmAgent : LlmAgent {
+    override suspend fun sendMessage(
+        messages: List<AgentMessage>,
+        systemInstruction: String?,
+        generationConfig: GeminiGenerationConfig?,
+        modelName: String?,
+        totalTokenLimit: Int?,
+    ): GeminiResult<String> = GeminiResult.Failure(GeminiNetworkError.MissingApiKey)
 }
 
 private fun MutableStateFlow<RagIndexingUiState>.updateProgress(
@@ -602,6 +947,40 @@ private fun MutableStateFlow<RagIndexingUiState>.updateProgress(
         )
     }
 }
+
+private fun RagCorpusDocumentInfo.toUi(): RagCorpusDocumentUi =
+    RagCorpusDocumentUi(
+        id = id,
+        title = title,
+        source = source,
+        wordCount = wordCount,
+        selectedByDefault = selectedByDefault,
+    )
+
+private fun RagIndexingUiState.resetAgentOutputs(): RagIndexingUiState =
+    copy(
+        ragContextResults = emptyList(),
+        noRagAnswerState = ResponsePaneState.Empty("No-RAG answer will appear after compare."),
+        ragAnswerState = ResponsePaneState.Empty("RAG answer will appear after compare."),
+        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
+    )
+
+private fun RagIndexingUiState.resetEvaluationOutput(): RagIndexingUiState =
+    copy(
+        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
+    )
+
+private fun GeminiResult<String>.toPaneState(): ResponsePaneState =
+    when (this) {
+        is GeminiResult.Success -> ResponsePaneState.Success(value)
+        is GeminiResult.Failure -> ResponsePaneState.Error(error.userMessage)
+    }
+
+private fun GeminiResult<String>.successValue(): String? =
+    when (this) {
+        is GeminiResult.Success -> value
+        is GeminiResult.Failure -> null
+    }
 
 private fun RagChunk.cacheKey(model: String): String =
     RagEmbeddingCacheKeys.key(

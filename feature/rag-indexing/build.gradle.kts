@@ -38,6 +38,9 @@ kotlin {
 
 dependencies {
     implementation(project(":core:designsystem"))
+    implementation(project(":core:network"))
+    implementation(project(":core:utils"))
+    implementation(project(":feature:common"))
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
