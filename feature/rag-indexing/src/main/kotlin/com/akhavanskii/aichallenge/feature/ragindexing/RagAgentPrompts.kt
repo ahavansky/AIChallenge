@@ -3,6 +3,13 @@ package com.akhavanskii.aichallenge.feature.ragindexing
 internal object RagAgentPrompts {
     fun buildNoRagPrompt(question: String): String = question
 
+    fun buildQueryRewritePrompt(question: String): String =
+        "Перепиши вопрос пользователя в короткий поисковый запрос для RAG по Markdown-корпусу. " +
+            "Сохрани язык, имена, числа, технические термины и смысл. " +
+            "Раскрой неясные местоимения только если это следует из вопроса. " +
+            "Верни только один поисковый запрос без кавычек, Markdown и пояснений.\n\n" +
+            "Вопрос:\n$question"
+
     fun buildRagPrompt(
         question: String,
         results: List<RagSearchResult>,
@@ -34,14 +41,35 @@ internal object RagAgentPrompts {
 
     fun buildEvaluationPrompt(
         question: String,
+        rewrittenQuery: String?,
+        queryRewriteNote: String?,
         expectedAnswer: String,
         expectedSources: String,
-        retrievedResults: List<RagSearchResult>,
+        baselineRetrievedResults: List<RagSearchResult>,
+        improvedCandidateResults: List<RagSearchResult>,
+        improvedRetrievedResults: List<RagSearchResult>,
         noRagAnswer: String,
-        ragAnswer: String,
+        baselineRagAnswer: String,
+        improvedRagAnswer: String,
     ): String {
-        val retrievedSources =
-            retrievedResults
+        val baselineSources =
+            baselineRetrievedResults
+                .mapIndexed { index, result ->
+                    val chunk = result.chunk
+                    val section = chunk.metadata["section_heading"].orEmpty()
+                    "${sourceRef(index)} chunk_id=${chunk.chunkId}; source=${chunk.source}; " +
+                        "section=$section; score=${"%.4f".format(result.score)}"
+                }.joinToString(separator = "\n")
+        val improvedCandidateSources =
+            improvedCandidateResults
+                .mapIndexed { index, result ->
+                    val chunk = result.chunk
+                    val section = chunk.metadata["section_heading"].orEmpty()
+                    "${sourceRef(index)} chunk_id=${chunk.chunkId}; source=${chunk.source}; " +
+                        "section=$section; score=${"%.4f".format(result.score)}"
+                }.joinToString(separator = "\n")
+        val improvedSources =
+            improvedRetrievedResults
                 .mapIndexed { index, result ->
                     val chunk = result.chunk
                     val section = chunk.metadata["section_heading"].orEmpty()
@@ -49,15 +77,22 @@ internal object RagAgentPrompts {
                         "section=$section; score=${"%.4f".format(result.score)}"
                 }.joinToString(separator = "\n")
 
-        return "Ты оцениваешь качество двух ответов на один вопрос: без RAG и с RAG.\n\n" +
+        return "Ты оцениваешь качество трех ответов на один вопрос: WITHOUT_RAG, BASELINE_RAG и IMPROVED_RAG.\n\n" +
             "Вопрос:\n$question\n\n" +
+            "Переписанный поисковый запрос:\n${rewrittenQuery.orEmpty()}\n\n" +
+            "Статус query rewrite:\n${queryRewriteNote.orEmpty()}\n\n" +
             "Ожидание:\n$expectedAnswer\n\n" +
             "Ожидаемые источники:\n$expectedSources\n\n" +
-            "Найденные RAG-источники:\n$retrievedSources\n\n" +
+            "Baseline RAG источники без фильтра/rewrite:\n$baselineSources\n\n" +
+            "Improved RAG кандидаты до фильтра:\n$improvedCandidateSources\n\n" +
+            "Improved RAG источники после similarity filter:\n$improvedSources\n\n" +
             "Ответ без RAG:\n$noRagAnswer\n\n" +
-            "Ответ с RAG:\n$ragAnswer\n\n" +
-            "Верни краткую таблицу со score 1-5 для accuracy, completeness, source_grounding и hallucination_risk. " +
-            "Затем укажи winner: WITHOUT_RAG или WITH_RAG, и коротко объясни почему."
+            "Ответ baseline RAG:\n$baselineRagAnswer\n\n" +
+            "Ответ improved RAG:\n$improvedRagAnswer\n\n" +
+            "Верни краткую таблицу со score 1-5 для accuracy, completeness, source_grounding и hallucination_risk " +
+            "по строкам WITHOUT_RAG, BASELINE_RAG, IMPROVED_RAG. " +
+            "Затем укажи baseline_vs_improved: BASELINE_RAG или IMPROVED_RAG, winner: WITHOUT_RAG, BASELINE_RAG или IMPROVED_RAG, " +
+            "и коротко объясни почему."
     }
 
     private fun sourceRef(index: Int): String = "[S${index + 1}]"

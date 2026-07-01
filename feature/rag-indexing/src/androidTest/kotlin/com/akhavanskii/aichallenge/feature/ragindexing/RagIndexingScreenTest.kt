@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -61,6 +62,18 @@ class RagIndexingScreenTest {
             .onNodeWithTag("${RagIndexingTags.LLM_MODEL_PREFIX}_${RagLlmModelOption.DEEPSEEK_V4_FLASH.name}")
             .assertIsDisplayed()
             .performClick()
+        composeRule.onNodeWithTag(RagIndexingTags.TOP_K_BEFORE_FILTER_SLIDER).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.TOP_K_AFTER_FILTER_SLIDER).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.SIMILARITY_THRESHOLD_SLIDER).performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithTag(RagIndexingTags.EXPECTED_ANSWER_INPUT).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(RagIndexingTags.EXPECTED_SOURCES_INPUT).assertCountEquals(0)
+        composeRule
+            .onNodeWithTag(RagIndexingTags.EXPECTATIONS_TOGGLE)
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag(RagIndexingTags.EXPECTED_ANSWER_INPUT).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.EXPECTED_SOURCES_INPUT).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag(RagIndexingTags.COMPARE_BUTTON).performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.QUERY_INPUT).performScrollTo().performTextInput("emulator endpoint")
         composeRule.onNodeWithTag(RagIndexingTags.BUILD_BUTTON).performScrollTo().assertIsEnabled()
@@ -160,8 +173,8 @@ class RagIndexingScreenTest {
         composeRule.onNodeWithTag(RagIndexingTags.SEARCH_BUTTON).performScrollTo().assertIsNotEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.CANCEL_BUTTON).performScrollTo().assertIsEnabled()
         composeRule.onNodeWithTag(RagIndexingTags.PROGRESS_INDICATOR).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Embedded 3/10").assertIsDisplayed()
-        composeRule.onNodeWithText("Cached embeddings: 2").assertIsDisplayed()
+        composeRule.onNodeWithText("Embedded 3/10").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Cached embeddings: 2").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -216,8 +229,8 @@ class RagIndexingScreenTest {
             .onNodeWithText("Who is Captain Ahab searching for?")
             .performScrollTo()
             .assertIsDisplayed()
-        composeRule.onNodeWithText("fixed_0001", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithText("structure_0003", substring = true).assertIsDisplayed()
+        composeRule.onAllNodesWithText("fixed_0001", substring = true).assertCountEquals(2)
+        composeRule.onAllNodesWithText("structure_0003", substring = true).assertCountEquals(2)
     }
 
     @Test
@@ -229,7 +242,7 @@ class RagIndexingScreenTest {
                         RagIndexingUiState(
                             phase = RagIndexingPhase.SUCCESS,
                             query = "emulator endpoint",
-                            topK = 2,
+                            searchRetrievalStats = retrievalStats(),
                             searchResults =
                                 listOf(
                                     RagSearchResultUi(
@@ -257,6 +270,7 @@ class RagIndexingScreenTest {
         }
 
         composeRule.onNodeWithTag(RagIndexingTags.SEARCH_RESULTS).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("candidates=2 -> filtered=2 -> used=2", substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag(RagIndexingTags.SEARCH_SCORE_CHART).assertIsDisplayed()
         composeRule.onNodeWithTag("${RagIndexingTags.SEARCH_SCORE_BAR_PREFIX}_0").assertIsDisplayed()
         composeRule.onNodeWithTag("${RagIndexingTags.SEARCH_SCORE_BAR_PREFIX}_1").assertIsDisplayed()
@@ -275,9 +289,15 @@ class RagIndexingScreenTest {
                             selectedCorpusDocumentIds = setOf("rag_course_2026_06_29"),
                             query = "Чем RAG отличается от MCP?",
                             noRagAnswerState = ResponsePaneState.Success("Generic answer without source."),
-                            ragAnswerState = ResponsePaneState.Success("RAG uses internal knowledge [S1]."),
-                            qualityEvaluationState = ResponsePaneState.Success("Winner: WITH_RAG"),
-                            ragContextResults = sampleSearchResults().take(1),
+                            baselineRagAnswerState = ResponsePaneState.Success("Baseline RAG uses internal knowledge [S1]."),
+                            improvedRagAnswerState = ResponsePaneState.Success("Improved RAG uses internal knowledge [S1]."),
+                            qualityEvaluationState = ResponsePaneState.Success("baseline_vs_improved: IMPROVED_RAG"),
+                            baselineRagContextResults = sampleSearchResults().take(1),
+                            improvedRagContextResults = sampleSearchResults().take(1),
+                            baselineRetrievalStats = retrievalStats(similarityThreshold = null),
+                            improvedRetrievalStats = retrievalStats(),
+                            rewrittenQuery = "RAG MCP distinction",
+                            queryRewriteNote = "Query rewrite applied.",
                         ),
                     onAction = {},
                     onBack = {},
@@ -288,17 +308,29 @@ class RagIndexingScreenTest {
         composeRule.onNodeWithTag(RagIndexingTags.AGENT_SECTION).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag(RagIndexingTags.NO_RAG_ANSWER).assertIsDisplayed()
         composeRule.onNodeWithText("Generic answer without source.").assertIsDisplayed()
-        composeRule.onNodeWithTag(RagIndexingTags.RAG_ANSWER).assertIsDisplayed()
-        composeRule.onNodeWithText("RAG uses internal knowledge [S1].").assertIsDisplayed()
-        composeRule.onNodeWithTag(RagIndexingTags.RETRIEVED_CONTEXT).assertIsDisplayed()
-        composeRule.onNodeWithTag("${RagIndexingTags.RETRIEVED_CONTEXT_RESULT_PREFIX}_0").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.BASELINE_RAG_ANSWER).assertIsDisplayed()
+        composeRule.onNodeWithText("Baseline RAG uses internal knowledge [S1].").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.BASELINE_CONTEXT).assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.BASELINE_CONTEXT_RESULT_PREFIX}_0").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.QUERY_REWRITE).assertIsDisplayed()
+        composeRule.onNodeWithText("rewritten_query: RAG MCP distinction").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.IMPROVED_RAG_ANSWER).assertIsDisplayed()
+        composeRule.onNodeWithText("Improved RAG uses internal knowledge [S1].").assertIsDisplayed()
+        composeRule.onNodeWithTag(RagIndexingTags.IMPROVED_CONTEXT).assertIsDisplayed()
+        composeRule.onNodeWithTag("${RagIndexingTags.IMPROVED_CONTEXT_RESULT_PREFIX}_0").assertIsDisplayed()
         composeRule.onNodeWithTag(RagIndexingTags.QUALITY_EVALUATION).assertIsDisplayed()
-        composeRule.onNodeWithText("Winner: WITH_RAG").assertIsDisplayed()
+        composeRule.onNodeWithText("baseline_vs_improved: IMPROVED_RAG").assertIsDisplayed()
     }
 
     private fun comparisonReport(): RagComparisonReport =
         RagComparisonReport(
             model = OllamaEmbeddingClient.DEFAULT_MODEL,
+            settings =
+                RagRetrievalSettings(
+                    topKBeforeFilter = RagIndexingUiState.DEFAULT_TOP_K_BEFORE_FILTER,
+                    topKAfterFilter = RagIndexingUiState.DEFAULT_TOP_K_AFTER_FILTER,
+                    similarityThreshold = RagIndexingUiState.DEFAULT_SIMILARITY_THRESHOLD,
+                ),
             strategies =
                 listOf(
                     RagComparisonStrategyStats(
@@ -321,30 +353,47 @@ class RagIndexingScreenTest {
             queries =
                 listOf(
                     RagComparisonQueryReport(
-                        query = "Who is Captain Ahab searching for?",
+                        originalQuery = "Who is Captain Ahab searching for?",
+                        rewrittenQuery = null,
                         fixed =
-                            listOf(
-                                RagComparisonHit(
-                                    chunkId = "fixed_0001",
-                                    score = 0.8123,
-                                    title = "Ahab",
-                                    source = "moby_dick.md",
-                                    preview = "Ahab searches for the white whale.",
-                                ),
+                            RagComparisonRetrievalReport(
+                                baselineHits = listOf(comparisonHit("fixed_0001", "Ahab", 0.8123)),
+                                improvedCandidates = listOf(comparisonHit("fixed_0001", "Ahab", 0.8123)),
+                                filteredHits = listOf(comparisonHit("fixed_0001", "Ahab", 0.8123)),
                             ),
                         structure =
-                            listOf(
-                                RagComparisonHit(
-                                    chunkId = "structure_0003",
-                                    score = 0.8344,
-                                    title = "Moby-Dick",
-                                    section = "Captain Ahab",
-                                    source = "moby_dick.md",
-                                    preview = "Captain Ahab follows the whale across the sea.",
-                                ),
+                            RagComparisonRetrievalReport(
+                                baselineHits = listOf(comparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
+                                improvedCandidates = listOf(comparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
+                                filteredHits = listOf(comparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
                             ),
                     ),
                 ),
+        )
+
+    private fun comparisonHit(
+        chunkId: String,
+        title: String,
+        score: Double,
+        section: String? = null,
+    ): RagComparisonHit =
+        RagComparisonHit(
+            chunkId = chunkId,
+            score = score,
+            title = title,
+            section = section,
+            source = "moby_dick.md",
+            preview = "Captain Ahab follows the whale across the sea.",
+        )
+
+    private fun retrievalStats(similarityThreshold: Double? = RagIndexingUiState.DEFAULT_SIMILARITY_THRESHOLD): RagRetrievalStatsUi =
+        RagRetrievalStatsUi(
+            candidateCount = 2,
+            filteredCount = 2,
+            usedCount = 2,
+            topKBeforeFilter = RagIndexingUiState.DEFAULT_TOP_K_BEFORE_FILTER,
+            topKAfterFilter = RagIndexingUiState.DEFAULT_TOP_K_AFTER_FILTER,
+            similarityThreshold = similarityThreshold,
         )
 
     private fun sampleSearchResults(): List<RagSearchResultUi> =

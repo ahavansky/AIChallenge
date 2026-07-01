@@ -259,7 +259,7 @@ After all successful and failed HuggingFace results are collected, the selected 
 
 ## RAG Indexing Demo
 
-The `RAG Index` screen builds two local RAG indexes from selected bundled Markdown corpus assets, compares fixed-size chunking with structure-aware chunking, searches the selected index with cosine ranking, and runs a two-mode RAG agent comparison. `Compare Modes` sends the user's question to the selected LLM once without RAG, then retrieves top-k chunks from the selected corpus, combines those chunks with the question, sends a RAG-grounded request to the same selected LLM, and asks that model to evaluate both answers against the editable expectation and expected source hints.
+The `RAG Index` screen builds two local RAG indexes from selected bundled Markdown corpus assets, compares fixed-size chunking with structure-aware chunking, searches the selected index with cosine ranking plus a relevance filter, and runs a three-mode RAG agent comparison. `Compare Modes` sends the user's question to the selected LLM once without RAG, once as baseline RAG with the original query and no relevance filter, then rewrites the query and runs improved RAG with top-k candidate retrieval, a cosine similarity threshold, and top-k after filtering. The same selected LLM then evaluates `WITHOUT_RAG`, `BASELINE_RAG`, and `IMPROVED_RAG` against the editable expectation and expected source hints.
 
 Corpus:
 
@@ -268,7 +268,14 @@ Corpus:
 - Current size: 2 Markdown files, 22,521 lines, 221,952 words, 1,346,191 bytes
 - Default selection: `rag_course_2026_06_29.md` selected, `moby-dick.md` visible but unchecked so the large book is only indexed when deliberately selected.
 
-The user writes each control question manually in `Control question`. `Expected answer` and `Expected sources` are optional evaluator hints; they are used only by the quality comparison request, not by the no-RAG or RAG answer prompt.
+The user writes each control question manually in `Control question`. `Expected answer` and `Expected sources` are optional evaluator hints; they are used only by the quality comparison request, not by the no-RAG, baseline RAG, improved RAG, or query rewrite prompts.
+
+Retrieval controls:
+
+- `Top K before filter`: candidate count retrieved from cosine search before relevance filtering. Default: `20`.
+- `Similarity threshold`: minimum cosine score kept for improved RAG. Default: `0.35`.
+- `Top K after filter`: maximum chunks injected into the final RAG prompt after filtering. Default: `5`.
+- `Search` uses the same filter controls and displays `candidates -> filtered -> used` counters.
 
 Ollama setup on the host machine:
 
@@ -294,13 +301,13 @@ The screen writes these files under Android `filesDir`:
 - `filesDir/rag-index/fixed/index.json`
 - `filesDir/rag-index/structure/index.json`
 - `filesDir/rag-index/cache/embeddings.json`
-- `filesDir/rag-index/comparison.json`
-- `filesDir/rag-index/comparison.md`
+- `filesDir/rag-index/comparison.json` with schema v2 retrieval settings, original query, optional rewritten query, baseline hits, improved candidates, and filtered hits.
+- `filesDir/rag-index/comparison.md` with the same comparison in a readable Markdown report.
 
 RAG agent requirements:
 
 - Embeddings: Ollama must be reachable at the selected endpoint.
-- Generation/evaluation: choose an LLM model on the screen. Gemini/Gemma options require `GEMINI_API_KEY`; DeepSeek options require `DEEPSEEK_API_KEY`. Both no-RAG/RAG answers and the quality comparison use the selected model through `LlmAgent`.
+- Generation/evaluation: choose an LLM model on the screen. Gemini/Gemma options require `GEMINI_API_KEY`; DeepSeek options require `DEEPSEEK_API_KEY`. No-RAG, baseline RAG, query rewrite, improved RAG, and the quality comparison use the selected model through `LlmAgent`.
 - Index reuse: stored indexes are reused only when the selected embedding model and selected corpus source hash match.
 
 Troubleshooting:

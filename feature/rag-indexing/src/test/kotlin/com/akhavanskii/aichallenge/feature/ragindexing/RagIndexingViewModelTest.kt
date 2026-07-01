@@ -2,6 +2,7 @@ package com.akhavanskii.aichallenge.feature.ragindexing
 
 import com.akhavanskii.aichallenge.core.network.AgentMessage
 import com.akhavanskii.aichallenge.core.network.GeminiGenerationConfig
+import com.akhavanskii.aichallenge.core.network.GeminiNetworkError
 import com.akhavanskii.aichallenge.core.network.GeminiResult
 import com.akhavanskii.aichallenge.core.network.LlmAgent
 import com.akhavanskii.aichallenge.feature.common.ResponsePaneState
@@ -122,6 +123,32 @@ class RagIndexingViewModelTest {
         }
 
     @Test
+    fun busyStateIgnoresSettingChangesUntilActiveWorkFinishes() =
+        runTest {
+            val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")))
+            val client =
+                RecordingEmbeddingClient {
+                    awaitCancellation()
+                }
+            val viewModel = viewModel(storage = storage, client = client)
+
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            assertEquals(RagIndexingPhase.BUILDING, viewModel.uiState.value.phase)
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("ignored query"))
+            viewModel.onAction(RagIndexingAction.ModelChanged("ignored-model"))
+            viewModel.onAction(RagIndexingAction.TopKBeforeFilterChanged(1))
+
+            val state = viewModel.uiState.value
+            assertEquals("", state.query)
+            assertEquals(OllamaEmbeddingClient.DEFAULT_MODEL, state.model)
+            assertEquals(RagIndexingUiState.DEFAULT_TOP_K_BEFORE_FILTER, state.topKBeforeFilter)
+
+            viewModel.onAction(RagIndexingAction.Cancel)
+            advanceUntilIdle()
+        }
+
+    @Test
     fun cacheReuseAvoidsDuplicateEmbeddingCalls() =
         runTest {
             val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")))
@@ -209,7 +236,8 @@ class RagIndexingViewModelTest {
             advanceUntilIdle()
 
             viewModel.onAction(RagIndexingAction.QueryChanged("alpha question"))
-            viewModel.onAction(RagIndexingAction.TopKChanged(1))
+            viewModel.onAction(RagIndexingAction.TopKBeforeFilterChanged(2))
+            viewModel.onAction(RagIndexingAction.TopKAfterFilterChanged(1))
             viewModel.onAction(RagIndexingAction.Search)
             advanceUntilIdle()
 
@@ -217,7 +245,66 @@ class RagIndexingViewModelTest {
             assertEquals(RagIndexingPhase.SUCCESS, state.phase)
             assertEquals(1, state.searchResults.size)
             assertEquals("Alpha", state.searchResults.single().title)
+            assertEquals(2, state.searchRetrievalStats?.candidateCount)
+            assertEquals(1, state.searchRetrievalStats?.usedCount)
             assertTrue(client.calls.any { call -> call.inputs == listOf("alpha question") })
+        }
+
+    @Test
+    fun retrievalControlsCoerceValuesAndClearSearchStats() =
+        runTest {
+            val storage = FakeRagIndexingStorage(corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha only")))
+            val client = RecordingEmbeddingClient()
+            val viewModel = viewModel(storage = storage, client = client)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            advanceUntilIdle()
+            viewModel.onAction(RagIndexingAction.QueryChanged("alpha question"))
+            viewModel.onAction(RagIndexingAction.Search)
+            advanceUntilIdle()
+            assertNotNull(viewModel.uiState.value.searchRetrievalStats)
+
+            viewModel.onAction(RagIndexingAction.TopKAfterFilterChanged(50))
+            viewModel.onAction(RagIndexingAction.TopKBeforeFilterChanged(3))
+            viewModel.onAction(RagIndexingAction.SimilarityThresholdChanged(2.0))
+
+            val state = viewModel.uiState.value
+            assertEquals(3, state.topKBeforeFilter)
+            assertEquals(3, state.topKAfterFilter)
+            assertEquals(1.0, state.similarityThreshold, 0.0)
+            assertEquals(null, state.searchRetrievalStats)
+        }
+
+    @Test
+    fun searchWithHighThresholdReturnsEmptyResultsAndStats() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus =
+                        listOf(
+                            document(id = "alpha", text = "# Alpha\nalpha only"),
+                            document(id = "beta", text = "# Beta\nbeta only"),
+                        ),
+                )
+            val client = RecordingEmbeddingClient()
+            val viewModel = viewModel(storage = storage, client = client)
+
+            viewModel.onAction(RagIndexingAction.BuildIndex)
+            advanceUntilIdle()
+            viewModel.onAction(RagIndexingAction.QueryChanged("unknown question"))
+            viewModel.onAction(RagIndexingAction.TopKBeforeFilterChanged(2))
+            viewModel.onAction(RagIndexingAction.TopKAfterFilterChanged(2))
+            viewModel.onAction(RagIndexingAction.SimilarityThresholdChanged(0.95))
+            viewModel.onAction(RagIndexingAction.Search)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertTrue(state.searchResults.isEmpty())
+            assertEquals(2, state.searchRetrievalStats?.candidateCount)
+            assertEquals(0, state.searchRetrievalStats?.filteredCount)
+            assertEquals(0, state.searchRetrievalStats?.usedCount)
         }
 
     @Test
@@ -237,7 +324,8 @@ class RagIndexingViewModelTest {
             val viewModel = viewModel(storage = storage, client = client)
 
             viewModel.onAction(RagIndexingAction.QueryChanged(query))
-            viewModel.onAction(RagIndexingAction.TopKChanged(2))
+            viewModel.onAction(RagIndexingAction.TopKBeforeFilterChanged(3))
+            viewModel.onAction(RagIndexingAction.TopKAfterFilterChanged(2))
             viewModel.onAction(RagIndexingAction.CompareStrategies)
             advanceUntilIdle()
 
@@ -247,7 +335,11 @@ class RagIndexingViewModelTest {
             assertEquals(RagIndexingPhase.SUCCESS, state.phase)
             assertEquals(1, report.queries.size)
             assertEquals(1, state.comparisonSummary?.queryCount)
-            assertEquals(query, comparisonQuery.query)
+            assertEquals(2, report.schemaVersion)
+            assertEquals(3, report.settings.topKBeforeFilter)
+            assertEquals(2, report.settings.topKAfterFilter)
+            assertEquals(query, comparisonQuery.originalQuery)
+            assertEquals(null, comparisonQuery.rewrittenQuery)
             assertTrue(client.calls.any { call -> call.inputs == listOf(query) })
             assertFalse(
                 client.calls.any { call ->
@@ -256,11 +348,16 @@ class RagIndexingViewModelTest {
                     }
                 },
             )
-            assertTrue(comparisonQuery.fixed.size <= 2)
-            assertTrue(comparisonQuery.structure.size <= 2)
+            assertTrue(comparisonQuery.fixed.baselineHits.size <= 2)
+            assertTrue(comparisonQuery.fixed.improvedCandidates.size <= 3)
+            assertTrue(comparisonQuery.fixed.filteredHits.size <= 2)
+            assertTrue(comparisonQuery.structure.baselineHits.size <= 2)
+            assertTrue(comparisonQuery.structure.improvedCandidates.size <= 3)
+            assertTrue(comparisonQuery.structure.filteredHits.size <= 2)
             assertEquals(setOf(RagIndexingStrategy.FIXED, RagIndexingStrategy.STRUCTURE), storage.indexes.keys)
             assertEquals(listOf("fixed", "structure"), report.strategies.map { stats -> stats.strategy })
             assertTrue(storage.comparisonMarkdown.orEmpty().contains("Retrieval Examples"))
+            assertTrue(storage.comparisonMarkdown.orEmpty().contains("filtered_hits"))
             assertEquals("/tmp/rag-index/comparison.json", state.comparisonSummary?.jsonPath)
             assertEquals("/tmp/rag-index/comparison.md", state.comparisonSummary?.markdownPath)
         }
@@ -289,7 +386,7 @@ class RagIndexingViewModelTest {
         }
 
     @Test
-    fun compareModesRunsNoRagRagAndEvaluator() =
+    fun compareModesRunsNoRagBaselineRagRewriteImprovedRagAndEvaluator() =
         runTest {
             val storage =
                 FakeRagIndexingStorage(
@@ -300,12 +397,17 @@ class RagIndexingViewModelTest {
                         ),
                 )
             val embeddingClient = RecordingEmbeddingClient()
+            var ragPromptCount = 0
             val llmAgent =
                 RecordingLlmAgent { call ->
                     when {
                         call.prompt == "What should RAG cite?" -> GeminiResult.Success("No RAG answer")
-                        call.prompt.contains("Ты RAG-ассистент") -> GeminiResult.Success("RAG answer [S1]")
-                        call.prompt.contains("Ты оцениваешь качество") -> GeminiResult.Success("Winner: WITH_RAG")
+                        call.prompt.contains("Перепиши вопрос") -> GeminiResult.Success("internal chunk citation query")
+                        call.prompt.contains("Ты RAG-ассистент") -> {
+                            ragPromptCount += 1
+                            GeminiResult.Success(if (ragPromptCount == 1) "Baseline RAG answer [S1]" else "Improved RAG answer [S1]")
+                        }
+                        call.prompt.contains("Ты оцениваешь качество") -> GeminiResult.Success("baseline_vs_improved: IMPROVED_RAG")
                         else -> GeminiResult.Success("Unexpected")
                     }
                 }
@@ -322,14 +424,24 @@ class RagIndexingViewModelTest {
             val state = viewModel.uiState.value
             assertEquals(RagIndexingPhase.SUCCESS, state.phase)
             assertTrue(state.noRagAnswerState is ResponsePaneState.Success)
-            assertTrue(state.ragAnswerState is ResponsePaneState.Success)
+            assertTrue(state.baselineRagAnswerState is ResponsePaneState.Success)
+            assertTrue(state.improvedRagAnswerState is ResponsePaneState.Success)
             assertTrue(state.qualityEvaluationState is ResponsePaneState.Success)
-            assertTrue(state.ragContextResults.isNotEmpty())
+            assertTrue(state.baselineRagContextResults.isNotEmpty())
+            assertTrue(state.improvedRagContextResults.isNotEmpty())
+            assertEquals("internal chunk citation query", state.rewrittenQuery)
+            assertEquals("Query rewrite applied.", state.queryRewriteNote)
+            assertNotNull(state.baselineRetrievalStats)
+            assertNotNull(state.improvedRetrievalStats)
             assertEquals(setOf(RagIndexingStrategy.FIXED), storage.indexes.keys)
-            assertEquals(3, llmAgent.calls.size)
+            assertEquals(5, llmAgent.calls.size)
             assertEquals("What should RAG cite?", llmAgent.calls[0].prompt)
             assertTrue(llmAgent.calls[1].prompt.contains("[S1]"))
-            assertTrue(llmAgent.calls[2].prompt.contains("Must cite internal chunks."))
+            assertTrue(llmAgent.calls[2].prompt.contains("Перепиши вопрос"))
+            assertTrue(llmAgent.calls[3].prompt.contains("[S1]"))
+            assertTrue(llmAgent.calls[4].prompt.contains("Must cite internal chunks."))
+            assertTrue(llmAgent.calls[4].prompt.contains("BASELINE_RAG"))
+            assertTrue(llmAgent.calls[4].prompt.contains("IMPROVED_RAG"))
             assertTrue(llmAgent.calls.all { call -> call.modelName == RagLlmModelOption.DEEPSEEK_V4_FLASH.modelName })
         }
 
@@ -351,12 +463,156 @@ class RagIndexingViewModelTest {
             viewModel.onAction(RagIndexingAction.CompareModes)
             advanceUntilIdle()
 
-            val ragPrompt = llmAgent.calls.single { call -> call.prompt.contains("Ты RAG-ассистент") }.prompt
+            val ragPrompts = llmAgent.calls.filter { call -> call.prompt.contains("Ты RAG-ассистент") }.map { call -> call.prompt }
             val evaluatorPrompt = llmAgent.calls.single { call -> call.prompt.contains("Ты оцениваешь качество") }.prompt
-            assertFalse(ragPrompt.contains("custom expectation"))
-            assertFalse(ragPrompt.contains("custom source"))
+            assertTrue(ragPrompts.isNotEmpty())
+            assertTrue(ragPrompts.none { prompt -> prompt.contains("custom expectation") })
+            assertTrue(ragPrompts.none { prompt -> prompt.contains("custom source") })
             assertTrue(evaluatorPrompt.contains("custom expectation"))
             assertTrue(evaluatorPrompt.contains("custom source"))
+        }
+
+    @Test
+    fun blankRewriteFallsBackToOriginalQuery() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            val llmAgent =
+                RecordingLlmAgent { call ->
+                    when {
+                        call.prompt.contains("Перепиши вопрос") -> GeminiResult.Success("   ")
+                        else -> GeminiResult.Success("ok")
+                    }
+                }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What is alpha?"))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertEquals("What is alpha?", state.rewrittenQuery)
+            assertEquals("Query rewrite returned empty text; original query used.", state.queryRewriteNote)
+            assertTrue(embeddingClient.calls.count { call -> call.inputs == listOf("What is alpha?") } >= 2)
+        }
+
+    @Test
+    fun failedRewriteFallsBackToOriginalQuery() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            val llmAgent =
+                RecordingLlmAgent { call ->
+                    when {
+                        call.prompt.contains("Перепиши вопрос") -> GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
+                        else -> GeminiResult.Success("ok")
+                    }
+                }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What is alpha?"))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertEquals("What is alpha?", state.rewrittenQuery)
+            assertEquals(
+                "Query rewrite failed: Gemini returned an empty response. Original query used.",
+                state.queryRewriteNote,
+            )
+        }
+
+    @Test
+    fun emptyFilteredContextStillRunsImprovedAnswerAndEvaluator() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus =
+                        listOf(
+                            document(id = "alpha", text = "# Alpha\nalpha content"),
+                            document(id = "beta", text = "# Beta\nbeta content"),
+                        ),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            val llmAgent =
+                RecordingLlmAgent { call ->
+                    when {
+                        call.prompt.contains("Перепиши вопрос") -> GeminiResult.Success("unknown query")
+                        call.prompt.contains("Ты RAG-ассистент") && !call.prompt.contains("[S1]") ->
+                            GeminiResult.Success("Context is insufficient.")
+                        else -> GeminiResult.Success("ok")
+                    }
+                }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("unknown question"))
+            viewModel.onAction(RagIndexingAction.SimilarityThresholdChanged(0.95))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertTrue(state.improvedRagAnswerState is ResponsePaneState.Success)
+            assertTrue(state.qualityEvaluationState is ResponsePaneState.Success)
+            assertEquals(0, state.improvedRagContextResults.size)
+            assertEquals(0, state.improvedRetrievalStats?.usedCount)
+            assertTrue(llmAgent.calls.any { call -> call.prompt.contains("Improved RAG источники после similarity filter") })
+        }
+
+    @Test
+    fun compareModesSkipsEvaluatorWhenImprovedAnswerFails() =
+        runTest {
+            val storage =
+                FakeRagIndexingStorage(
+                    corpus = listOf(document(id = "alpha", text = "# Alpha\nalpha content")),
+                )
+            val embeddingClient = RecordingEmbeddingClient()
+            var ragPromptCount = 0
+            val llmAgent =
+                RecordingLlmAgent { call ->
+                    when {
+                        call.prompt == "What is alpha?" -> GeminiResult.Success("No RAG answer")
+                        call.prompt.contains("Перепиши вопрос") -> GeminiResult.Success("alpha query")
+                        call.prompt.contains("Ты RAG-ассистент") -> {
+                            ragPromptCount += 1
+                            if (ragPromptCount == 1) {
+                                GeminiResult.Success("Baseline RAG answer")
+                            } else {
+                                GeminiResult.Failure(GeminiNetworkError.EmptyResponse)
+                            }
+                        }
+                        call.prompt.contains("Ты оцениваешь качество") -> error("Evaluator should not be called.")
+                        else -> GeminiResult.Success("ok")
+                    }
+                }
+            val viewModel = viewModel(storage = storage, client = embeddingClient, llmAgent = llmAgent)
+            advanceUntilIdle()
+
+            viewModel.onAction(RagIndexingAction.QueryChanged("What is alpha?"))
+            viewModel.onAction(RagIndexingAction.CompareModes)
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(RagIndexingPhase.SUCCESS, state.phase)
+            assertTrue(state.noRagAnswerState is ResponsePaneState.Success)
+            assertTrue(state.baselineRagAnswerState is ResponsePaneState.Success)
+            assertTrue(state.improvedRagAnswerState is ResponsePaneState.Error)
+            assertEquals(
+                ResponsePaneState.Error("Quality comparison skipped: all three modes must return successful answers."),
+                state.qualityEvaluationState,
+            )
+            assertFalse(llmAgent.calls.any { call -> call.prompt.contains("Ты оцениваешь качество") })
         }
 
     @Test

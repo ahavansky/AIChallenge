@@ -12,20 +12,31 @@ data class RagIndexingUiState(
     val query: String = "",
     val expectedAnswer: String = "",
     val expectedSources: String = "",
-    val topK: Int = DEFAULT_TOP_K,
+    val topKBeforeFilter: Int = DEFAULT_TOP_K_BEFORE_FILTER,
+    val topKAfterFilter: Int = DEFAULT_TOP_K_AFTER_FILTER,
+    val similarityThreshold: Double = DEFAULT_SIMILARITY_THRESHOLD,
     val phase: RagIndexingPhase = RagIndexingPhase.IDLE,
     val progress: RagIndexingProgress = RagIndexingProgress(),
     val indexSummaries: List<RagIndexSummary> = emptyList(),
     val comparisonSummary: RagComparisonSummary? = null,
     val comparisonReport: RagComparisonReport? = null,
     val searchResults: List<RagSearchResultUi> = emptyList(),
-    val ragContextResults: List<RagSearchResultUi> = emptyList(),
+    val searchRetrievalStats: RagRetrievalStatsUi? = null,
+    val baselineRagContextResults: List<RagSearchResultUi> = emptyList(),
+    val improvedRagCandidateResults: List<RagSearchResultUi> = emptyList(),
+    val improvedRagContextResults: List<RagSearchResultUi> = emptyList(),
+    val baselineRetrievalStats: RagRetrievalStatsUi? = null,
+    val improvedRetrievalStats: RagRetrievalStatsUi? = null,
+    val rewrittenQuery: String? = null,
+    val queryRewriteNote: String? = null,
     val noRagAnswerState: ResponsePaneState =
         ResponsePaneState.Empty("No-RAG answer will appear after compare."),
-    val ragAnswerState: ResponsePaneState =
-        ResponsePaneState.Empty("RAG answer will appear after compare."),
+    val baselineRagAnswerState: ResponsePaneState =
+        ResponsePaneState.Empty("Baseline RAG answer will appear after compare."),
+    val improvedRagAnswerState: ResponsePaneState =
+        ResponsePaneState.Empty("Improved RAG answer will appear after compare."),
     val qualityEvaluationState: ResponsePaneState =
-        ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
+        ResponsePaneState.Empty("Quality comparison will appear after all answers finish."),
     val userFacingError: String? = null,
 ) {
     val isBusy: Boolean
@@ -38,7 +49,13 @@ data class RagIndexingUiState(
                 phase == RagIndexingPhase.EVALUATING
 
     companion object {
-        const val DEFAULT_TOP_K = 5
+        const val DEFAULT_TOP_K_BEFORE_FILTER = 20
+        const val DEFAULT_TOP_K_AFTER_FILTER = 5
+        const val DEFAULT_SIMILARITY_THRESHOLD = 0.35
+        const val MIN_TOP_K = 1
+        const val MAX_TOP_K = 20
+        const val MIN_SIMILARITY_THRESHOLD = 0.0
+        const val MAX_SIMILARITY_THRESHOLD = 1.0
     }
 }
 
@@ -161,8 +178,16 @@ sealed interface RagIndexingAction {
         val expectedSources: String,
     ) : RagIndexingAction
 
-    data class TopKChanged(
+    data class TopKBeforeFilterChanged(
         val topK: Int,
+    ) : RagIndexingAction
+
+    data class TopKAfterFilterChanged(
+        val topK: Int,
+    ) : RagIndexingAction
+
+    data class SimilarityThresholdChanged(
+        val threshold: Double,
     ) : RagIndexingAction
 
     data object BuildIndex : RagIndexingAction
@@ -216,6 +241,15 @@ data class RagSearchResultUi(
     val section: String?,
     val source: String,
     val preview: String,
+)
+
+data class RagRetrievalStatsUi(
+    val candidateCount: Int,
+    val filteredCount: Int,
+    val usedCount: Int,
+    val topKBeforeFilter: Int,
+    val topKAfterFilter: Int,
+    val similarityThreshold: Double?,
 )
 
 data class RagComparisonSummary(

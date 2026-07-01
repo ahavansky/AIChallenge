@@ -39,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -203,39 +204,77 @@ private fun RagIndexingControls(
                     .heightIn(min = 112.dp)
                     .testTag(RagIndexingTags.QUERY_INPUT),
         )
-        RagTextField(
-            value = state.expectedAnswer,
-            onValueChange = { onAction(RagIndexingAction.ExpectedAnswerChanged(it)) },
+        EvaluationExpectationsSection(
+            expectedAnswer = state.expectedAnswer,
+            expectedSources = state.expectedSources,
             enabled = !state.isBusy,
-            label = "Expected answer",
-            placeholder = "Facts that should be present in the answer.",
-            minLines = 3,
-            modifier =
-                Modifier
-                    .heightIn(min = 112.dp)
-                    .testTag(RagIndexingTags.EXPECTED_ANSWER_INPUT),
+            onExpectedAnswerChanged = { onAction(RagIndexingAction.ExpectedAnswerChanged(it)) },
+            onExpectedSourcesChanged = { onAction(RagIndexingAction.ExpectedSourcesChanged(it)) },
         )
-        RagTextField(
-            value = state.expectedSources,
-            onValueChange = { onAction(RagIndexingAction.ExpectedSourcesChanged(it)) },
+        RetrievalControls(
+            topKBeforeFilter = state.topKBeforeFilter,
+            topKAfterFilter = state.topKAfterFilter,
+            similarityThreshold = state.similarityThreshold,
             enabled = !state.isBusy,
-            label = "Expected sources",
-            placeholder = "Document names or sections expected in RAG context.",
-            minLines = 2,
-            modifier =
-                Modifier
-                    .heightIn(min = 88.dp)
-                    .testTag(RagIndexingTags.EXPECTED_SOURCES_INPUT),
-        )
-        TopKSelector(
-            topK = state.topK,
-            enabled = !state.isBusy,
-            onTopKChanged = { onAction(RagIndexingAction.TopKChanged(it)) },
+            onTopKBeforeChanged = { onAction(RagIndexingAction.TopKBeforeFilterChanged(it)) },
+            onTopKAfterChanged = { onAction(RagIndexingAction.TopKAfterFilterChanged(it)) },
+            onSimilarityThresholdChanged = { onAction(RagIndexingAction.SimilarityThresholdChanged(it)) },
         )
         RagActionButtons(
             state = state,
             onAction = onAction,
         )
+    }
+}
+
+@Composable
+private fun EvaluationExpectationsSection(
+    expectedAnswer: String,
+    expectedSources: String,
+    enabled: Boolean,
+    onExpectedAnswerChanged: (String) -> Unit,
+    onExpectedSourcesChanged: (String) -> Unit,
+) {
+    val expanded = rememberSaveable { mutableStateOf(false) }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedButton(
+            onClick = { expanded.value = !expanded.value },
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .testTag(RagIndexingTags.EXPECTATIONS_TOGGLE),
+        ) {
+            Text(if (expanded.value) "Hide expected answer/sources" else "Show expected answer/sources")
+        }
+        if (expanded.value) {
+            RagTextField(
+                value = expectedAnswer,
+                onValueChange = onExpectedAnswerChanged,
+                enabled = enabled,
+                label = "Expected answer",
+                placeholder = "Facts that should be present in the answer.",
+                minLines = 3,
+                modifier =
+                    Modifier
+                        .heightIn(min = 112.dp)
+                        .testTag(RagIndexingTags.EXPECTED_ANSWER_INPUT),
+            )
+            RagTextField(
+                value = expectedSources,
+                onValueChange = onExpectedSourcesChanged,
+                enabled = enabled,
+                label = "Expected sources",
+                placeholder = "Document names or sections expected in RAG context.",
+                minLines = 2,
+                modifier =
+                    Modifier
+                        .heightIn(min = 88.dp)
+                        .testTag(RagIndexingTags.EXPECTED_SOURCES_INPUT),
+            )
+        }
     }
 }
 
@@ -426,27 +465,81 @@ private fun StrategySelector(
 }
 
 @Composable
-private fun TopKSelector(
-    topK: Int,
+private fun RetrievalControls(
+    topKBeforeFilter: Int,
+    topKAfterFilter: Int,
+    similarityThreshold: Double,
     enabled: Boolean,
-    onTopKChanged: (Int) -> Unit,
+    onTopKBeforeChanged: (Int) -> Unit,
+    onTopKAfterChanged: (Int) -> Unit,
+    onSimilarityThresholdChanged: (Double) -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = "Top K: $topK",
+            text = "Retrieval filter",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
-        Slider(
-            value = topK.toFloat(),
-            onValueChange = { onTopKChanged(it.roundToInt()) },
+        RetrievalSlider(
+            label = "Top K before filter",
+            valueText = topKBeforeFilter.toString(),
+            value = topKBeforeFilter.toFloat(),
+            onValueChange = { onTopKBeforeChanged(it.roundToInt()) },
             enabled = enabled,
-            valueRange = 1f..20f,
-            steps = 18,
-            modifier = Modifier.testTag(RagIndexingTags.TOP_K_SLIDER),
+            valueRange = RagIndexingUiState.MIN_TOP_K.toFloat()..RagIndexingUiState.MAX_TOP_K.toFloat(),
+            steps = RagIndexingUiState.MAX_TOP_K - RagIndexingUiState.MIN_TOP_K - 1,
+            modifier = Modifier.testTag(RagIndexingTags.TOP_K_BEFORE_FILTER_SLIDER),
+        )
+        RetrievalSlider(
+            label = "Top K after filter",
+            valueText = topKAfterFilter.toString(),
+            value = topKAfterFilter.toFloat(),
+            onValueChange = { onTopKAfterChanged(it.roundToInt()) },
+            enabled = enabled,
+            valueRange = RagIndexingUiState.MIN_TOP_K.toFloat()..RagIndexingUiState.MAX_TOP_K.toFloat(),
+            steps = RagIndexingUiState.MAX_TOP_K - RagIndexingUiState.MIN_TOP_K - 1,
+            modifier = Modifier.testTag(RagIndexingTags.TOP_K_AFTER_FILTER_SLIDER),
+        )
+        RetrievalSlider(
+            label = "Similarity threshold",
+            valueText = similarityThreshold.format2(),
+            value = similarityThreshold.toFloat(),
+            onValueChange = { value -> onSimilarityThresholdChanged((value * 20f).roundToInt() / 20.0) },
+            enabled = enabled,
+            valueRange = RagIndexingUiState.MIN_SIMILARITY_THRESHOLD.toFloat()..RagIndexingUiState.MAX_SIMILARITY_THRESHOLD.toFloat(),
+            steps = 19,
+            modifier = Modifier.testTag(RagIndexingTags.SIMILARITY_THRESHOLD_SLIDER),
+        )
+    }
+}
+
+@Composable
+private fun RetrievalSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    enabled: Boolean,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    modifier: Modifier = Modifier,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = "$label: $valueText",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Slider(
+            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = onValueChange,
+            enabled = enabled,
+            valueRange = valueRange,
+            steps = steps,
+            modifier = modifier,
         )
     }
 }
@@ -539,7 +632,10 @@ private fun RagIndexingOutputs(
             summary = state.comparisonSummary,
             report = state.comparisonReport,
         )
-        SearchResults(results = state.searchResults)
+        SearchResults(
+            results = state.searchResults,
+            stats = state.searchRetrievalStats,
+        )
     }
 }
 
@@ -637,11 +733,35 @@ private fun RagAgentSection(state: RagIndexingUiState) {
             modifier = Modifier.testTag(RagIndexingTags.NO_RAG_ANSWER),
         )
         AgentResponsePane(
-            title = "Answer with RAG",
-            state = state.ragAnswerState,
-            modifier = Modifier.testTag(RagIndexingTags.RAG_ANSWER),
+            title = "Baseline RAG answer",
+            state = state.baselineRagAnswerState,
+            modifier = Modifier.testTag(RagIndexingTags.BASELINE_RAG_ANSWER),
         )
-        RetrievedContext(results = state.ragContextResults)
+        RetrievedContext(
+            title = "Baseline context",
+            results = state.baselineRagContextResults,
+            stats = state.baselineRetrievalStats,
+            emptyMessage = "No baseline context yet.",
+            resultTagPrefix = RagIndexingTags.BASELINE_CONTEXT_RESULT_PREFIX,
+            modifier = Modifier.testTag(RagIndexingTags.BASELINE_CONTEXT),
+        )
+        QueryRewriteSummary(
+            rewrittenQuery = state.rewrittenQuery,
+            note = state.queryRewriteNote,
+        )
+        AgentResponsePane(
+            title = "Improved RAG answer",
+            state = state.improvedRagAnswerState,
+            modifier = Modifier.testTag(RagIndexingTags.IMPROVED_RAG_ANSWER),
+        )
+        RetrievedContext(
+            title = "Improved context after filter",
+            results = state.improvedRagContextResults,
+            stats = state.improvedRetrievalStats,
+            emptyMessage = "No improved context yet.",
+            resultTagPrefix = RagIndexingTags.IMPROVED_CONTEXT_RESULT_PREFIX,
+            modifier = Modifier.testTag(RagIndexingTags.IMPROVED_CONTEXT),
+        )
         AgentResponsePane(
             title = "Quality comparison",
             state = state.qualityEvaluationState,
@@ -706,22 +826,65 @@ private fun AgentResponsePane(
 }
 
 @Composable
-private fun RetrievedContext(results: List<RagSearchResultUi>) {
+private fun QueryRewriteSummary(
+    rewrittenQuery: String?,
+    note: String?,
+) {
     Column(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .testTag(RagIndexingTags.RETRIEVED_CONTEXT),
+                .testTag(RagIndexingTags.QUERY_REWRITE),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "Retrieved context",
+            text = "Query rewrite",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+        if (rewrittenQuery.isNullOrBlank()) {
+            Text(
+                text = "No rewritten query yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            LabeledValue(label = "rewritten_query", value = rewrittenQuery)
+        }
+        note?.takeIf { it.isNotBlank() }?.let { value ->
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetrievedContext(
+    title: String,
+    results: List<RagSearchResultUi>,
+    stats: RagRetrievalStatsUi?,
+    emptyMessage: String,
+    resultTagPrefix: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        stats?.let { retrievalStats ->
+            RetrievalStatsLine(stats = retrievalStats)
+        }
         if (results.isEmpty()) {
             Text(
-                text = "No RAG context yet.",
+                text = emptyMessage,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -729,11 +892,25 @@ private fun RetrievedContext(results: List<RagSearchResultUi>) {
             results.forEachIndexed { index, result ->
                 SearchResultDetails(
                     result = result,
-                    modifier = Modifier.testTag("${RagIndexingTags.RETRIEVED_CONTEXT_RESULT_PREFIX}_$index"),
+                    modifier = Modifier.testTag("${resultTagPrefix}_$index"),
                 )
             }
         }
     }
+}
+
+@Composable
+private fun RetrievalStatsLine(stats: RagRetrievalStatsUi) {
+    val threshold =
+        stats.similarityThreshold?.let { value -> ", threshold=${value.format2()}" }.orEmpty()
+    Text(
+        text =
+            "candidates=${stats.candidateCount} -> filtered=${stats.filteredCount} -> used=${stats.usedCount} " +
+                "(before=${stats.topKBeforeFilter}, after=${stats.topKAfterFilter}$threshold)",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontFamily = FontFamily.Monospace,
+    )
 }
 
 @Composable
@@ -900,6 +1077,16 @@ private fun ComparisonSection(
                         "structure=${summary.structureAverageTokens.format1()}",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            report?.let { value ->
+                Text(
+                    text =
+                        "filter before=${value.settings.topKBeforeFilter}, " +
+                            "after=${value.settings.topKAfterFilter}, " +
+                            "threshold=${value.settings.similarityThreshold.format2()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             LabeledValue(label = "comparison.json", value = summary.jsonPath, monospace = true)
             LabeledValue(label = "comparison.md", value = summary.markdownPath, monospace = true)
             report?.queries?.forEachIndexed { index, query ->
@@ -923,27 +1110,30 @@ private fun ComparisonQuery(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = query.query,
+            text = query.originalQuery,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+        query.rewrittenQuery?.takeIf { value -> value.isNotBlank() }?.let { rewritten ->
+            LabeledValue(label = "rewritten_query", value = rewritten)
+        }
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             maxItemsInEachRow = 2,
         ) {
-            ComparisonHits(
+            ComparisonRetrieval(
                 title = "Fixed",
-                hits = query.fixed,
+                report = query.fixed,
                 modifier =
                     Modifier
                         .weight(1f)
                         .widthIn(min = 240.dp),
             )
-            ComparisonHits(
+            ComparisonRetrieval(
                 title = "Structure",
-                hits = query.structure,
+                report = query.structure,
                 modifier =
                     Modifier
                         .weight(1f)
@@ -954,9 +1144,9 @@ private fun ComparisonQuery(
 }
 
 @Composable
-private fun ComparisonHits(
+private fun ComparisonRetrieval(
     title: String,
-    hits: List<RagComparisonHit>,
+    report: RagComparisonRetrievalReport,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -967,6 +1157,31 @@ private fun ComparisonHits(
             text = title,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text =
+                "baseline=${report.baselineHits.size}, " +
+                    "candidates=${report.improvedCandidates.size}, " +
+                    "filtered=${report.filteredHits.size}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = FontFamily.Monospace,
+        )
+        ComparisonHits(title = "Baseline", hits = report.baselineHits)
+        ComparisonHits(title = "Filtered", hits = report.filteredHits)
+    }
+}
+
+@Composable
+private fun ComparisonHits(
+    title: String,
+    hits: List<RagComparisonHit>,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (hits.isEmpty()) {
             Text(
@@ -992,7 +1207,10 @@ private fun ComparisonHits(
 }
 
 @Composable
-private fun SearchResults(results: List<RagSearchResultUi>) {
+private fun SearchResults(
+    results: List<RagSearchResultUi>,
+    stats: RagRetrievalStatsUi?,
+) {
     Column(
         modifier =
             Modifier
@@ -1013,6 +1231,9 @@ private fun SearchResults(results: List<RagSearchResultUi>) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
+            stats?.let { retrievalStats ->
+                RetrievalStatsLine(stats = retrievalStats)
+            }
             SearchScoreChart(results = results)
             Text(
                 text = "Result details",
@@ -1220,6 +1441,8 @@ private fun RagComparisonHit.sectionSuffix(): String = section?.takeIf { it.isNo
 
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
 
+private fun Double.format2(): String = String.format(Locale.US, "%.2f", this)
+
 private fun Double.format4(): String = String.format(Locale.US, "%.4f", this)
 
 private const val MIN_VISIBLE_SCORE_BAR_FRACTION = 0.06
@@ -1237,9 +1460,12 @@ object RagIndexingTags {
     const val LLM_MODEL_SELECTOR = "rag_indexing_llm_model_selector"
     const val LLM_MODEL_PREFIX = "rag_indexing_llm_model"
     const val QUERY_INPUT = "rag_indexing_query_input"
+    const val EXPECTATIONS_TOGGLE = "rag_indexing_expectations_toggle"
     const val EXPECTED_ANSWER_INPUT = "rag_indexing_expected_answer_input"
     const val EXPECTED_SOURCES_INPUT = "rag_indexing_expected_sources_input"
-    const val TOP_K_SLIDER = "rag_indexing_top_k_slider"
+    const val TOP_K_BEFORE_FILTER_SLIDER = "rag_indexing_top_k_before_filter_slider"
+    const val TOP_K_AFTER_FILTER_SLIDER = "rag_indexing_top_k_after_filter_slider"
+    const val SIMILARITY_THRESHOLD_SLIDER = "rag_indexing_similarity_threshold_slider"
     const val BUILD_BUTTON = "rag_indexing_build_button"
     const val COMPARE_BUTTON = "rag_indexing_compare_button"
     const val SEARCH_BUTTON = "rag_indexing_search_button"
@@ -1260,10 +1486,14 @@ object RagIndexingTags {
     const val COMPARISON_QUERY_PREFIX = "rag_indexing_comparison_query"
     const val AGENT_SECTION = "rag_indexing_agent_section"
     const val NO_RAG_ANSWER = "rag_indexing_no_rag_answer"
-    const val RAG_ANSWER = "rag_indexing_rag_answer"
+    const val BASELINE_RAG_ANSWER = "rag_indexing_baseline_rag_answer"
+    const val IMPROVED_RAG_ANSWER = "rag_indexing_improved_rag_answer"
     const val QUALITY_EVALUATION = "rag_indexing_quality_evaluation"
-    const val RETRIEVED_CONTEXT = "rag_indexing_retrieved_context"
-    const val RETRIEVED_CONTEXT_RESULT_PREFIX = "rag_indexing_retrieved_context_result"
+    const val QUERY_REWRITE = "rag_indexing_query_rewrite"
+    const val BASELINE_CONTEXT = "rag_indexing_baseline_context"
+    const val BASELINE_CONTEXT_RESULT_PREFIX = "rag_indexing_baseline_context_result"
+    const val IMPROVED_CONTEXT = "rag_indexing_improved_context"
+    const val IMPROVED_CONTEXT_RESULT_PREFIX = "rag_indexing_improved_context_result"
     const val SEARCH_RESULTS = "rag_indexing_search_results"
     const val SEARCH_SCORE_CHART = "rag_indexing_search_score_chart"
     const val SEARCH_SCORE_BAR_PREFIX = "rag_indexing_search_score_bar"
@@ -1340,15 +1570,26 @@ private fun RagIndexingScreenResultsPreview() {
                         ),
                     comparisonReport = sampleComparisonReport(),
                     searchResults = sampleSearchResults(),
-                    ragContextResults = sampleSearchResults().take(2),
+                    searchRetrievalStats = sampleRetrievalStats(),
+                    baselineRagContextResults = sampleSearchResults().take(2),
+                    improvedRagCandidateResults = sampleSearchResults(),
+                    improvedRagContextResults = sampleSearchResults().take(2),
+                    baselineRetrievalStats = sampleRetrievalStats(similarityThreshold = null),
+                    improvedRetrievalStats = sampleRetrievalStats(),
+                    rewrittenQuery = "Android emulator host service endpoint",
+                    queryRewriteNote = "Query rewrite applied.",
                     noRagAnswerState = ResponsePaneState.Success("Use localhost from the emulator."),
-                    ragAnswerState =
+                    baselineRagAnswerState =
+                        ResponsePaneState.Success(
+                            "Use `10.0.2.2` from the Android emulator to reach host services. Source: [S1] `fixed_0001`.",
+                        ),
+                    improvedRagAnswerState =
                         ResponsePaneState.Success(
                             "Use `10.0.2.2` from the Android emulator to reach services running on the host machine. Source: [S1] `fixed_0001`.",
                         ),
                     qualityEvaluationState =
                         ResponsePaneState.Success(
-                            "| mode | accuracy | source_grounding |\n|---|---:|---:|\n| WITHOUT_RAG | 2 | 1 |\n| WITH_RAG | 5 | 5 |\n\nWinner: WITH_RAG.",
+                            "| mode | accuracy | source_grounding |\n|---|---:|---:|\n| WITHOUT_RAG | 2 | 1 |\n| BASELINE_RAG | 4 | 4 |\n| IMPROVED_RAG | 5 | 5 |\n\nbaseline_vs_improved: IMPROVED_RAG.",
                         ),
                 ),
             onAction = {},
@@ -1373,6 +1614,16 @@ private fun sampleCorpusDocuments(): List<RagCorpusDocumentUi> =
             wordCount = 210_000,
             selectedByDefault = false,
         ),
+    )
+
+private fun sampleRetrievalStats(similarityThreshold: Double? = RagIndexingUiState.DEFAULT_SIMILARITY_THRESHOLD): RagRetrievalStatsUi =
+    RagRetrievalStatsUi(
+        candidateCount = 5,
+        filteredCount = if (similarityThreshold == null) 5 else 3,
+        usedCount = if (similarityThreshold == null) 5 else 2,
+        topKBeforeFilter = RagIndexingUiState.DEFAULT_TOP_K_BEFORE_FILTER,
+        topKAfterFilter = RagIndexingUiState.DEFAULT_TOP_K_AFTER_FILTER,
+        similarityThreshold = similarityThreshold,
     )
 
 private fun sampleSearchResults(): List<RagSearchResultUi> =
@@ -1422,6 +1673,12 @@ private fun sampleSearchResults(): List<RagSearchResultUi> =
 private fun sampleComparisonReport(): RagComparisonReport =
     RagComparisonReport(
         model = OllamaEmbeddingClient.DEFAULT_MODEL,
+        settings =
+            RagRetrievalSettings(
+                topKBeforeFilter = RagIndexingUiState.DEFAULT_TOP_K_BEFORE_FILTER,
+                topKAfterFilter = RagIndexingUiState.DEFAULT_TOP_K_AFTER_FILTER,
+                similarityThreshold = RagIndexingUiState.DEFAULT_SIMILARITY_THRESHOLD,
+            ),
         strategies =
             listOf(
                 RagComparisonStrategyStats(
@@ -1444,28 +1701,39 @@ private fun sampleComparisonReport(): RagComparisonReport =
         queries =
             listOf(
                 RagComparisonQueryReport(
-                    query = "Who is Captain Ahab searching for?",
+                    originalQuery = "Who is Captain Ahab searching for?",
+                    rewrittenQuery = null,
                     fixed =
-                        listOf(
-                            RagComparisonHit(
-                                chunkId = "fixed_0001",
-                                score = 0.8123,
-                                title = "Ahab",
-                                source = "moby_dick.md",
-                                preview = "Ahab searches for the white whale.",
-                            ),
+                        RagComparisonRetrievalReport(
+                            baselineHits = listOf(sampleComparisonHit("fixed_0001", "Ahab", 0.8123)),
+                            improvedCandidates =
+                                listOf(
+                                    sampleComparisonHit("fixed_0001", "Ahab", 0.8123),
+                                    sampleComparisonHit("fixed_0002", "Whale", 0.4012),
+                                ),
+                            filteredHits = listOf(sampleComparisonHit("fixed_0001", "Ahab", 0.8123)),
                         ),
                     structure =
-                        listOf(
-                            RagComparisonHit(
-                                chunkId = "structure_0003",
-                                score = 0.8344,
-                                title = "Moby-Dick",
-                                section = "Captain Ahab",
-                                source = "moby_dick.md",
-                                preview = "Captain Ahab follows the whale across the sea.",
-                            ),
+                        RagComparisonRetrievalReport(
+                            baselineHits = listOf(sampleComparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
+                            improvedCandidates = listOf(sampleComparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
+                            filteredHits = listOf(sampleComparisonHit("structure_0003", "Moby-Dick", 0.8344, "Captain Ahab")),
                         ),
                 ),
             ),
+    )
+
+private fun sampleComparisonHit(
+    chunkId: String,
+    title: String,
+    score: Double,
+    section: String? = null,
+): RagComparisonHit =
+    RagComparisonHit(
+        chunkId = chunkId,
+        score = score,
+        title = title,
+        section = section,
+        source = "moby_dick.md",
+        preview = "Captain Ahab follows the whale across the sea.",
     )

@@ -27,6 +27,28 @@ object RagSearch {
             ).take(topK)
     }
 
+    fun searchWithFilter(
+        index: RagIndex,
+        queryEmbedding: List<Double>,
+        topKBeforeFilter: Int,
+        topKAfterFilter: Int,
+        similarityThreshold: Double,
+    ): RagFilteredSearchResult {
+        val candidates =
+            search(
+                index = index,
+                queryEmbedding = queryEmbedding,
+                topK = topKBeforeFilter,
+            )
+        val filtered = candidates.filter { result -> result.score >= similarityThreshold }
+
+        return RagFilteredSearchResult(
+            candidates = candidates,
+            filtered = filtered,
+            selected = filtered.take(topKAfterFilter.coerceAtLeast(0)),
+        )
+    }
+
     fun cosineSimilarity(
         left: List<Double>,
         right: List<Double>,
@@ -51,3 +73,9 @@ object RagSearch {
         return dot / (sqrt(leftNorm) * sqrt(rightNorm))
     }
 }
+
+data class RagFilteredSearchResult(
+    val candidates: List<RagSearchResult>,
+    val filtered: List<RagSearchResult>,
+    val selected: List<RagSearchResult>,
+)

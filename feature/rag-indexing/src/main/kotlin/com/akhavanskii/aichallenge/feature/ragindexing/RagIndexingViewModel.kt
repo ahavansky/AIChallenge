@@ -107,12 +107,37 @@ class RagIndexingViewModel private constructor(
                             userFacingError = null,
                         ).resetEvaluationOutput()
                 }
-            is RagIndexingAction.TopKChanged ->
+            is RagIndexingAction.TopKBeforeFilterChanged ->
                 updateWhenIdle {
-                    it.copy(
-                        topK = action.topK.coerceIn(MIN_TOP_K, MAX_TOP_K),
-                        userFacingError = null,
-                    )
+                    val topKBeforeFilter = action.topK.coerceIn(MIN_TOP_K, MAX_TOP_K)
+                    it
+                        .copy(
+                            topKBeforeFilter = topKBeforeFilter,
+                            topKAfterFilter = it.topKAfterFilter.coerceAtMost(topKBeforeFilter),
+                            searchResults = emptyList(),
+                            searchRetrievalStats = null,
+                            userFacingError = null,
+                        ).resetAgentOutputs()
+                }
+            is RagIndexingAction.TopKAfterFilterChanged ->
+                updateWhenIdle {
+                    it
+                        .copy(
+                            topKAfterFilter = action.topK.coerceIn(MIN_TOP_K, it.topKBeforeFilter.coerceAtMost(MAX_TOP_K)),
+                            searchResults = emptyList(),
+                            searchRetrievalStats = null,
+                            userFacingError = null,
+                        ).resetAgentOutputs()
+                }
+            is RagIndexingAction.SimilarityThresholdChanged ->
+                updateWhenIdle {
+                    it
+                        .copy(
+                            similarityThreshold = action.threshold.coerceIn(MIN_SIMILARITY_THRESHOLD, MAX_SIMILARITY_THRESHOLD),
+                            searchResults = emptyList(),
+                            searchRetrievalStats = null,
+                            userFacingError = null,
+                        ).resetAgentOutputs()
                 }
             RagIndexingAction.BuildIndex -> buildIndex()
             RagIndexingAction.CompareStrategies -> compareStrategies()
@@ -168,6 +193,7 @@ class RagIndexingViewModel private constructor(
                     comparisonSummary = null,
                     comparisonReport = null,
                     searchResults = emptyList(),
+                    searchRetrievalStats = null,
                     userFacingError = null,
                 ).resetAgentOutputs()
         }
@@ -203,6 +229,7 @@ class RagIndexingViewModel private constructor(
                     comparisonSummary = null,
                     comparisonReport = null,
                     searchResults = emptyList(),
+                    searchRetrievalStats = null,
                     userFacingError = null,
                 ).resetAgentOutputs()
         }
@@ -236,6 +263,7 @@ class RagIndexingViewModel private constructor(
                     comparisonSummary = null,
                     comparisonReport = null,
                     searchResults = emptyList(),
+                    searchRetrievalStats = null,
                     userFacingError = null,
                 )
             }
@@ -261,7 +289,7 @@ class RagIndexingViewModel private constructor(
         launchActiveWork(RagIndexingPhase.COMPARING) {
             val endpoint = request.endpoint.trim()
             val model = request.model.trim()
-            val topK = request.topK.coerceIn(MIN_TOP_K, MAX_TOP_K)
+            val settings = request.retrievalSettings()
             val result =
                 withContext(ioDispatcher) {
                     val indexes =
@@ -278,7 +306,7 @@ class RagIndexingViewModel private constructor(
                             model = model,
                             indexes = indexes,
                             query = query,
-                            topK = topK,
+                            settings = settings,
                         )
                     val markdown = report.toMarkdown()
                     val paths = storage.writeComparison(report = report, markdown = markdown)
@@ -313,14 +341,14 @@ class RagIndexingViewModel private constructor(
         launchActiveWork(RagIndexingPhase.SEARCHING) {
             val endpoint = request.endpoint.trim()
             val model = request.model.trim()
-            val results =
+            val searchRun =
                 withContext(ioDispatcher) {
                     searchIndex(
                         endpoint = endpoint,
                         model = model,
                         strategy = request.selectedStrategy,
                         query = request.query,
-                        topK = request.topK,
+                        settings = request.retrievalSettings(),
                         documentIds = documentIds,
                     )
                 }
@@ -328,7 +356,8 @@ class RagIndexingViewModel private constructor(
             mutableUiState.update { current ->
                 current.copy(
                     phase = RagIndexingPhase.SUCCESS,
-                    searchResults = results,
+                    searchResults = searchRun.results,
+                    searchRetrievalStats = searchRun.stats,
                     userFacingError = null,
                 )
             }
@@ -355,14 +384,21 @@ class RagIndexingViewModel private constructor(
             val embeddingModel = request.model.trim()
             val llmModelName = request.selectedLlmModel.modelName
             val strategy = request.selectedStrategy
-            val topK = request.topK.coerceIn(MIN_TOP_K, MAX_TOP_K)
+            val settings = request.retrievalSettings()
 
             mutableUiState.update { current ->
                 current.copy(
                     noRagAnswerState = ResponsePaneState.Loading,
-                    ragAnswerState = ResponsePaneState.Loading,
-                    qualityEvaluationState = ResponsePaneState.Empty("Waiting for both answers before quality comparison."),
-                    ragContextResults = emptyList(),
+                    baselineRagAnswerState = ResponsePaneState.Loading,
+                    improvedRagAnswerState = ResponsePaneState.Loading,
+                    qualityEvaluationState = ResponsePaneState.Empty("Waiting for all answers before quality comparison."),
+                    baselineRagContextResults = emptyList(),
+                    improvedRagCandidateResults = emptyList(),
+                    improvedRagContextResults = emptyList(),
+                    baselineRetrievalStats = null,
+                    improvedRetrievalStats = null,
+                    rewrittenQuery = null,
+                    queryRewriteNote = null,
                     userFacingError = null,
                 )
             }
@@ -377,7 +413,7 @@ class RagIndexingViewModel private constructor(
                 current.copy(noRagAnswerState = noRagResult.toPaneState())
             }
 
-            val ragRun =
+            val baselineRun =
                 runCatching {
                     runRagAnswer(
                         endpoint = endpoint,
@@ -385,33 +421,75 @@ class RagIndexingViewModel private constructor(
                         llmModelName = llmModelName,
                         strategy = strategy,
                         question = question,
-                        topK = topK,
+                        retrievalQuery = question,
+                        settings = settings,
+                        useFilter = false,
                         documentIds = documentIds,
                     )
                 }.getOrElse { throwable ->
                     mutableUiState.update { current ->
                         current.copy(
-                            ragAnswerState = ResponsePaneState.Error(throwable.toUserFacingMessage()),
+                            baselineRagAnswerState = ResponsePaneState.Error(throwable.toUserFacingMessage()),
                         )
                     }
                     throw throwable
                 }
             mutableUiState.update { current ->
                 current.copy(
-                    ragAnswerState = ragRun.answer.toPaneState(),
-                    ragContextResults = ragRun.retrieved.map { result -> result.toUi() },
+                    baselineRagAnswerState = baselineRun.answer.toPaneState(),
+                    baselineRagContextResults = baselineRun.retrieved.map { result -> result.toUi() },
+                    baselineRetrievalStats = baselineRun.stats,
+                )
+            }
+
+            val rewrite = rewriteQuery(question = question, llmModelName = llmModelName)
+            mutableUiState.update { current ->
+                current.copy(
+                    rewrittenQuery = rewrite.query,
+                    queryRewriteNote = rewrite.note,
+                )
+            }
+
+            val improvedRun =
+                runCatching {
+                    runRagAnswer(
+                        endpoint = endpoint,
+                        embeddingModel = embeddingModel,
+                        llmModelName = llmModelName,
+                        strategy = strategy,
+                        question = question,
+                        retrievalQuery = rewrite.query,
+                        settings = settings,
+                        useFilter = true,
+                        documentIds = documentIds,
+                    )
+                }.getOrElse { throwable ->
+                    mutableUiState.update { current ->
+                        current.copy(
+                            improvedRagAnswerState = ResponsePaneState.Error(throwable.toUserFacingMessage()),
+                        )
+                    }
+                    throw throwable
+                }
+            mutableUiState.update { current ->
+                current.copy(
+                    improvedRagAnswerState = improvedRun.answer.toPaneState(),
+                    improvedRagCandidateResults = improvedRun.candidates.map { result -> result.toUi() },
+                    improvedRagContextResults = improvedRun.retrieved.map { result -> result.toUi() },
+                    improvedRetrievalStats = improvedRun.stats,
                 )
             }
 
             val noRagAnswer = noRagResult.successValue()
-            val ragAnswer = ragRun.answer.successValue()
-            if (noRagAnswer == null || ragAnswer == null) {
+            val baselineRagAnswer = baselineRun.answer.successValue()
+            val improvedRagAnswer = improvedRun.answer.successValue()
+            if (noRagAnswer == null || baselineRagAnswer == null || improvedRagAnswer == null) {
                 mutableUiState.update { current ->
                     current.copy(
                         phase = RagIndexingPhase.SUCCESS,
                         qualityEvaluationState =
                             ResponsePaneState.Error(
-                                "Quality comparison skipped: both modes must return successful answers.",
+                                "Quality comparison skipped: all three modes must return successful answers.",
                             ),
                     )
                 }
@@ -427,11 +505,16 @@ class RagIndexingViewModel private constructor(
             val evaluationPrompt =
                 RagAgentPrompts.buildEvaluationPrompt(
                     question = question,
+                    rewrittenQuery = rewrite.query,
+                    queryRewriteNote = rewrite.note,
                     expectedAnswer = request.expectedAnswer,
                     expectedSources = request.expectedSources,
-                    retrievedResults = ragRun.retrieved,
+                    baselineRetrievedResults = baselineRun.retrieved,
+                    improvedCandidateResults = improvedRun.candidates,
+                    improvedRetrievedResults = improvedRun.retrieved,
                     noRagAnswer = noRagAnswer,
-                    ragAnswer = ragAnswer,
+                    baselineRagAnswer = baselineRagAnswer,
+                    improvedRagAnswer = improvedRagAnswer,
                 )
             val evaluationResult =
                 llmAgent.sendMessage(
@@ -455,7 +538,9 @@ class RagIndexingViewModel private constructor(
         llmModelName: String,
         strategy: RagIndexingStrategy,
         question: String,
-        topK: Int,
+        retrievalQuery: String,
+        settings: RagRetrievalSettings,
+        useFilter: Boolean,
         documentIds: Set<String>,
     ): RagAnswerRun {
         val index =
@@ -470,18 +555,34 @@ class RagIndexingViewModel private constructor(
             embedBatch(
                 endpoint = endpoint,
                 model = embeddingModel,
-                inputs = listOf(question),
+                inputs = listOf(retrievalQuery),
             ).single()
-        val retrieved =
-            RagSearch.search(
-                index = index,
-                queryEmbedding = queryEmbedding,
-                topK = topK,
-            )
+        val search =
+            if (useFilter) {
+                RagSearch.searchWithFilter(
+                    index = index,
+                    queryEmbedding = queryEmbedding,
+                    topKBeforeFilter = settings.topKBeforeFilter,
+                    topKAfterFilter = settings.topKAfterFilter,
+                    similarityThreshold = settings.similarityThreshold,
+                )
+            } else {
+                val results =
+                    RagSearch.search(
+                        index = index,
+                        queryEmbedding = queryEmbedding,
+                        topK = settings.topKAfterFilter,
+                    )
+                RagFilteredSearchResult(
+                    candidates = results,
+                    filtered = results,
+                    selected = results,
+                )
+            }
         val prompt =
             RagAgentPrompts.buildRagPrompt(
                 question = question,
-                results = retrieved,
+                results = search.selected,
             )
         val answer =
             llmAgent.sendMessage(
@@ -492,8 +593,48 @@ class RagIndexingViewModel private constructor(
 
         return RagAnswerRun(
             answer = answer,
-            retrieved = retrieved,
+            candidates = search.candidates,
+            retrieved = search.selected,
+            stats =
+                search.toStatsUi(
+                    settings = settings,
+                    similarityThreshold = if (useFilter) settings.similarityThreshold else null,
+                ),
         )
+    }
+
+    private suspend fun rewriteQuery(
+        question: String,
+        llmModelName: String,
+    ): QueryRewriteRun {
+        val result =
+            llmAgent.sendMessage(
+                prompt = RagAgentPrompts.buildQueryRewritePrompt(question),
+                generationConfig = null,
+                modelName = llmModelName,
+            )
+
+        return when (result) {
+            is GeminiResult.Success -> {
+                val rewritten = result.value.normalizedRewriteOrNull()
+                if (rewritten == null) {
+                    QueryRewriteRun(
+                        query = question,
+                        note = "Query rewrite returned empty text; original query used.",
+                    )
+                } else {
+                    QueryRewriteRun(
+                        query = rewritten,
+                        note = "Query rewrite applied.",
+                    )
+                }
+            }
+            is GeminiResult.Failure ->
+                QueryRewriteRun(
+                    query = question,
+                    note = "Query rewrite failed: ${result.error.userMessage.trim().trimEnd('.')}. Original query used.",
+                )
+        }
     }
 
     private fun cancelActiveJob() {
@@ -526,6 +667,7 @@ class RagIndexingViewModel private constructor(
                     ),
                 userFacingError = null,
                 searchResults = if (phase == RagIndexingPhase.SEARCHING) emptyList() else current.searchResults,
+                searchRetrievalStats = if (phase == RagIndexingPhase.SEARCHING) null else current.searchRetrievalStats,
             )
         }
         activeJob =
@@ -764,7 +906,7 @@ class RagIndexingViewModel private constructor(
         model: String,
         indexes: Map<RagIndexingStrategy, RagIndex>,
         query: String,
-        topK: Int,
+        settings: RagRetrievalSettings,
     ): RagComparisonReport {
         currentCoroutineContext().ensureActive()
         val queryEmbedding =
@@ -776,6 +918,7 @@ class RagIndexingViewModel private constructor(
 
         return RagComparisonReport(
             model = model,
+            settings = settings,
             strategies =
                 listOf(
                     indexes.getValue(RagIndexingStrategy.FIXED).comparisonStats(RagIndexingStrategy.FIXED),
@@ -784,9 +927,10 @@ class RagIndexingViewModel private constructor(
             queries =
                 listOf(
                     RagComparisonQueryReport(
-                        query = query,
-                        fixed = indexes.getValue(RagIndexingStrategy.FIXED).comparisonHits(queryEmbedding, topK),
-                        structure = indexes.getValue(RagIndexingStrategy.STRUCTURE).comparisonHits(queryEmbedding, topK),
+                        originalQuery = query,
+                        rewrittenQuery = null,
+                        fixed = indexes.getValue(RagIndexingStrategy.FIXED).comparisonRetrieval(queryEmbedding, settings),
+                        structure = indexes.getValue(RagIndexingStrategy.STRUCTURE).comparisonRetrieval(queryEmbedding, settings),
                     ),
                 ),
         )
@@ -797,9 +941,9 @@ class RagIndexingViewModel private constructor(
         model: String,
         strategy: RagIndexingStrategy,
         query: String,
-        topK: Int,
+        settings: RagRetrievalSettings,
         documentIds: Set<String>,
-    ): List<RagSearchResultUi> {
+    ): SearchRun {
         val normalizedQuery = query.trim()
         if (normalizedQuery.isBlank()) {
             throw UserFacingRagException("Enter a query before search.")
@@ -823,12 +967,20 @@ class RagIndexingViewModel private constructor(
                 inputs = listOf(normalizedQuery),
             ).single()
 
-        return RagSearch
-            .search(
-                index = index,
-                queryEmbedding = queryEmbedding,
-                topK = topK,
-            ).map { result -> result.toUi() }
+        val search =
+            RagSearch
+                .searchWithFilter(
+                    index = index,
+                    queryEmbedding = queryEmbedding,
+                    topKBeforeFilter = settings.topKBeforeFilter,
+                    topKAfterFilter = settings.topKAfterFilter,
+                    similarityThreshold = settings.similarityThreshold,
+                )
+
+        return SearchRun(
+            results = search.selected.map { result -> result.toUi() },
+            stats = search.toStatsUi(settings = settings, similarityThreshold = settings.similarityThreshold),
+        )
     }
 
     private suspend fun embedBatch(
@@ -895,9 +1047,21 @@ class RagIndexingViewModel private constructor(
         val summary: RagComparisonSummary,
     )
 
+    private data class SearchRun(
+        val results: List<RagSearchResultUi>,
+        val stats: RagRetrievalStatsUi,
+    )
+
+    private data class QueryRewriteRun(
+        val query: String,
+        val note: String,
+    )
+
     private data class RagAnswerRun(
         val answer: GeminiResult<String>,
+        val candidates: List<RagSearchResult>,
         val retrieved: List<RagSearchResult>,
+        val stats: RagRetrievalStatsUi,
     )
 
     private class EmbeddingRagException(
@@ -910,8 +1074,10 @@ class RagIndexingViewModel private constructor(
 
     private companion object {
         const val DEFAULT_EMBEDDING_BATCH_SIZE = 8
-        const val MIN_TOP_K = 1
-        const val MAX_TOP_K = 20
+        const val MIN_TOP_K = RagIndexingUiState.MIN_TOP_K
+        const val MAX_TOP_K = RagIndexingUiState.MAX_TOP_K
+        const val MIN_SIMILARITY_THRESHOLD = RagIndexingUiState.MIN_SIMILARITY_THRESHOLD
+        const val MAX_SIMILARITY_THRESHOLD = RagIndexingUiState.MAX_SIMILARITY_THRESHOLD
     }
 }
 
@@ -959,16 +1125,62 @@ private fun RagCorpusDocumentInfo.toUi(): RagCorpusDocumentUi =
 
 private fun RagIndexingUiState.resetAgentOutputs(): RagIndexingUiState =
     copy(
-        ragContextResults = emptyList(),
+        baselineRagContextResults = emptyList(),
+        improvedRagCandidateResults = emptyList(),
+        improvedRagContextResults = emptyList(),
+        baselineRetrievalStats = null,
+        improvedRetrievalStats = null,
+        rewrittenQuery = null,
+        queryRewriteNote = null,
         noRagAnswerState = ResponsePaneState.Empty("No-RAG answer will appear after compare."),
-        ragAnswerState = ResponsePaneState.Empty("RAG answer will appear after compare."),
-        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
+        baselineRagAnswerState = ResponsePaneState.Empty("Baseline RAG answer will appear after compare."),
+        improvedRagAnswerState = ResponsePaneState.Empty("Improved RAG answer will appear after compare."),
+        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after all answers finish."),
     )
 
 private fun RagIndexingUiState.resetEvaluationOutput(): RagIndexingUiState =
     copy(
-        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after both answers finish."),
+        qualityEvaluationState = ResponsePaneState.Empty("Quality comparison will appear after all answers finish."),
     )
+
+private fun RagIndexingUiState.retrievalSettings(): RagRetrievalSettings =
+    RagRetrievalSettings(
+        topKBeforeFilter = topKBeforeFilter.coerceIn(RagIndexingUiState.MIN_TOP_K, RagIndexingUiState.MAX_TOP_K),
+        topKAfterFilter =
+            topKAfterFilter.coerceIn(
+                RagIndexingUiState.MIN_TOP_K,
+                topKBeforeFilter.coerceIn(RagIndexingUiState.MIN_TOP_K, RagIndexingUiState.MAX_TOP_K),
+            ),
+        similarityThreshold =
+            similarityThreshold.coerceIn(
+                RagIndexingUiState.MIN_SIMILARITY_THRESHOLD,
+                RagIndexingUiState.MAX_SIMILARITY_THRESHOLD,
+            ),
+    )
+
+private fun RagFilteredSearchResult.toStatsUi(
+    settings: RagRetrievalSettings,
+    similarityThreshold: Double?,
+): RagRetrievalStatsUi =
+    RagRetrievalStatsUi(
+        candidateCount = candidates.size,
+        filteredCount = filtered.size,
+        usedCount = selected.size,
+        topKBeforeFilter = settings.topKBeforeFilter,
+        topKAfterFilter = settings.topKAfterFilter,
+        similarityThreshold = similarityThreshold,
+    )
+
+private fun String.normalizedRewriteOrNull(): String? =
+    trim()
+        .removeSurrounding("```")
+        .trim()
+        .removePrefix("Rewritten query:")
+        .removePrefix("Переписанный запрос:")
+        .trim()
+        .trim('"')
+        .trim()
+        .takeIf { value -> value.isNotBlank() }
 
 private fun GeminiResult<String>.toPaneState(): ResponsePaneState =
     when (this) {
@@ -1021,25 +1233,43 @@ private fun RagIndex.comparisonStats(strategy: RagIndexingStrategy): RagComparis
     )
 }
 
-private fun RagIndex.comparisonHits(
+private fun RagIndex.comparisonRetrieval(
     queryEmbedding: List<Double>,
-    topK: Int,
-): List<RagComparisonHit> =
-    RagSearch
-        .search(
+    settings: RagRetrievalSettings,
+): RagComparisonRetrievalReport {
+    val baseline =
+        RagSearch.search(
             index = this,
             queryEmbedding = queryEmbedding,
-            topK = topK,
-        ).map { result ->
-            RagComparisonHit(
-                chunkId = result.chunk.chunkId,
-                score = result.score,
-                title = result.chunk.title,
-                section = result.chunk.metadata["section_heading"],
-                source = result.chunk.source,
-                preview = result.chunk.preview(),
-            )
-        }
+            topK = settings.topKAfterFilter,
+        )
+    val improved =
+        RagSearch.searchWithFilter(
+            index = this,
+            queryEmbedding = queryEmbedding,
+            topKBeforeFilter = settings.topKBeforeFilter,
+            topKAfterFilter = settings.topKAfterFilter,
+            similarityThreshold = settings.similarityThreshold,
+        )
+
+    return RagComparisonRetrievalReport(
+        baselineHits = baseline.toComparisonHits(),
+        improvedCandidates = improved.candidates.toComparisonHits(),
+        filteredHits = improved.selected.toComparisonHits(),
+    )
+}
+
+private fun List<RagSearchResult>.toComparisonHits(): List<RagComparisonHit> =
+    map { result ->
+        RagComparisonHit(
+            chunkId = result.chunk.chunkId,
+            score = result.score,
+            title = result.chunk.title,
+            section = result.chunk.metadata["section_heading"],
+            source = result.chunk.source,
+            preview = result.chunk.preview(),
+        )
+    }
 
 private fun RagSearchResult.toUi(): RagSearchResultUi =
     RagSearchResultUi(
@@ -1075,7 +1305,13 @@ private fun RagComparisonReport.toMarkdown(): String =
     buildString {
         appendLine("# RAG Strategy Comparison")
         appendLine()
+        appendLine("- Schema: `$schemaVersion`")
         appendLine("- Model: `$model`")
+        appendLine(
+            "- Retrieval: top_k_before_filter=${settings.topKBeforeFilter}, " +
+                "top_k_after_filter=${settings.topKAfterFilter}, " +
+                "similarity_threshold=${"%.2f".format(settings.similarityThreshold)}",
+        )
         strategies.forEach { stats ->
             appendLine(
                 "- ${stats.strategy}: chunks=${stats.chunkCount}, embeddings=${stats.embeddingCount}, " +
@@ -1086,17 +1322,36 @@ private fun RagComparisonReport.toMarkdown(): String =
         appendLine("## Retrieval Examples")
         queries.forEach { query ->
             appendLine()
-            appendLine("### ${query.query}")
+            appendLine("### ${query.originalQuery}")
+            query.rewrittenQuery?.takeIf { value -> value.isNotBlank() }?.let { rewritten ->
+                appendLine()
+                appendLine("- Rewritten query: `$rewritten`")
+            }
             appendLine()
             appendLine("Fixed:")
-            query.fixed.forEach { hit ->
-                appendLine("- ${"%.4f".format(hit.score)} `${hit.chunkId}` ${hit.title} - ${hit.preview}")
-            }
+            appendMarkdown(query.fixed)
             appendLine()
             appendLine("Structure:")
-            query.structure.forEach { hit ->
-                val section = hit.section?.let { value -> " / $value" }.orEmpty()
-                appendLine("- ${"%.4f".format(hit.score)} `${hit.chunkId}` ${hit.title}$section - ${hit.preview}")
-            }
+            appendMarkdown(query.structure)
         }
     }
+
+private fun StringBuilder.appendMarkdown(report: RagComparisonRetrievalReport) {
+    appendLine("- baseline_hits=${report.baselineHits.size}")
+    report.baselineHits.forEach { hit ->
+        appendLine(hit.toMarkdownLine())
+    }
+    appendLine("- improved_candidates=${report.improvedCandidates.size}")
+    report.improvedCandidates.forEach { hit ->
+        appendLine(hit.toMarkdownLine())
+    }
+    appendLine("- filtered_hits=${report.filteredHits.size}")
+    report.filteredHits.forEach { hit ->
+        appendLine(hit.toMarkdownLine())
+    }
+}
+
+private fun RagComparisonHit.toMarkdownLine(): String {
+    val section = section?.let { value -> " / $value" }.orEmpty()
+    return "  - ${"%.4f".format(score)} `$chunkId` $title$section - $preview"
+}

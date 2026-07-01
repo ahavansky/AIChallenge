@@ -237,6 +237,49 @@ class RagIndexerTest {
         assertTrue(results[0].score >= results[1].score)
     }
 
+    @Test
+    fun filteredSearchUsesTopKBeforeThresholdAndTopKAfter() {
+        val documents =
+            listOf(
+                document(id = "best", text = "best match"),
+                document(id = "second", text = "second match"),
+                document(id = "third", text = "third match"),
+                document(id = "worst", text = "worst match"),
+            )
+        val strategy = ChunkingStrategy.Fixed(maxTokens = 10, overlapTokens = 0)
+        val chunks = documents.flatMap { document -> indexer.chunk(document, strategy) }
+        val embeddingsByChunkId =
+            mapOf(
+                chunks[0].chunkId to listOf(1.0, 0.0),
+                chunks[1].chunkId to listOf(0.9, 0.1),
+                chunks[2].chunkId to listOf(0.6, 0.8),
+                chunks[3].chunkId to listOf(0.0, 1.0),
+            )
+        val index =
+            indexer.buildIndex(
+                documents = documents,
+                strategy = strategy,
+                model = "test-embedding",
+                embeddingsByChunkId = embeddingsByChunkId,
+            )
+
+        val result =
+            RagSearch.searchWithFilter(
+                index = index,
+                queryEmbedding = listOf(1.0, 0.0),
+                topKBeforeFilter = 3,
+                topKAfterFilter = 2,
+                similarityThreshold = 0.7,
+            )
+
+        assertEquals(3, result.candidates.size)
+        assertEquals(2, result.filtered.size)
+        assertEquals(2, result.selected.size)
+        assertEquals(chunks[0].chunkId, result.selected[0].chunk.chunkId)
+        assertEquals(chunks[1].chunkId, result.selected[1].chunk.chunkId)
+        assertTrue(result.candidates[0].score >= result.candidates[1].score)
+    }
+
     private fun document(
         id: String = "doc",
         text: String,
